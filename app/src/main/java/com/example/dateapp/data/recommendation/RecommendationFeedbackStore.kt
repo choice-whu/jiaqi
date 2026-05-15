@@ -2,6 +2,7 @@ package com.example.dateapp.data.recommendation
 
 import android.content.Context
 import java.util.Locale
+import kotlin.math.roundToInt
 
 data class RecommendationPreferenceProfile(
     val category: String,
@@ -40,22 +41,28 @@ data class RecommendationPreferenceProfile(
         }
 
         val liked = likedTraits
-            .take(5)
+            .take(3)
             .joinToString(" / ") { RecommendationTraitAnalyzer.labelFor(it) }
         val disliked = dislikedTraits
-            .take(5)
+            .take(3)
             .joinToString(" / ") { RecommendationTraitAnalyzer.labelFor(it) }
+        val strengthLabel = when {
+            eventCount >= 8 -> "Strong preference"
+            eventCount >= 4 -> "Clear preference"
+            else -> "Soft preference"
+        }
 
         return buildString {
             if (liked.isNotBlank()) {
-                append("User tends to like: ")
+                append(strengthLabel)
+                append(": likes ")
                 append(liked)
                 append(". ")
             }
             if (disliked.isNotBlank()) {
-                append("User recently rejected: ")
+                append("Avoids ")
                 append(disliked)
-                append(". Avoid over-recommending these unless clearly appropriate.")
+                append(".")
             }
         }.trim().takeIf { it.isNotBlank() }
     }
@@ -211,11 +218,21 @@ class RecommendationFeedbackStore(context: Context) {
                 return@forEach
             }
 
+            val recencyMultiplier = recencyMultiplier(
+                ageMillis = System.currentTimeMillis() - event.timestamp
+            )
+            val weightedAction = (actionWeight * recencyMultiplier)
+                .roundToInt()
+                .coerceIn(-8, 8)
+            if (weightedAction == 0) {
+                return@forEach
+            }
+
             RecommendationTraitAnalyzer.extractTraits(
                 text = listOf(event.title, event.tag).joinToString(" "),
                 category = event.category
             ).forEach { trait ->
-                traitScores[trait] = (traitScores[trait] ?: 0) + actionWeight
+                traitScores[trait] = (traitScores[trait] ?: 0) + weightedAction
             }
         }
 
@@ -272,6 +289,18 @@ class RecommendationFeedbackStore(context: Context) {
             tag = null,
             action = ACTION_NOT_INTERESTED
         )
+    }
+
+    private fun recencyMultiplier(ageMillis: Long): Double {
+        val ageDays = (ageMillis / DAY_MILLIS.toDouble()).coerceAtLeast(0.0)
+        return when {
+            ageDays <= 1.0 -> 1.25
+            ageDays <= 3.0 -> 1.15
+            ageDays <= 7.0 -> 1.0
+            ageDays <= 14.0 -> 0.85
+            ageDays <= 30.0 -> 0.7
+            else -> 0.55
+        }
     }
 
     fun recordPositiveFeedback(
@@ -475,6 +504,7 @@ class RecommendationFeedbackStore(context: Context) {
         const val ACTION_NAVIGATE = "navigate"
         const val ACTION_EXTERNAL_SEARCH = "external_search"
         const val ACTION_NOT_INTERESTED = "not_interested"
+        private const val DAY_MILLIS = 24L * 60L * 60L * 1000L
         private const val POSITIVE_TRAIT_THRESHOLD = 4
         private const val NEGATIVE_TRAIT_THRESHOLD = -4
     }
