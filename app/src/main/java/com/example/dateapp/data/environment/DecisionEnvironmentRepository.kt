@@ -13,7 +13,10 @@ import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
 import com.example.dateapp.data.location.LocationHelper
 import com.example.dateapp.data.remote.WeatherApiService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -50,6 +53,8 @@ class DecisionEnvironmentRepository(
     private var cachedLocationCapturedAtMs: Long = 0L
     private var cachedEnvironmentSnapshot: DecisionEnvironmentSnapshot? = null
     private var cachedEnvironmentCapturedAtMs: Long = 0L
+    private var cachedWeatherSnapshot: WeatherSnapshot? = null
+    private var cachedWeatherCapturedAtMs: Long = 0L
 
     suspend fun getCurrentLocationSnapshot(): UserLocationSnapshot {
         cachedLocationSnapshot
@@ -82,7 +87,15 @@ class DecisionEnvironmentRepository(
     suspend fun getEnvironmentSnapshot(): DecisionEnvironmentSnapshot {
         val currentTime = ZonedDateTime.now(wuhanZone)
         cachedEnvironmentSnapshot
-            ?.takeIf { SystemClock.elapsedRealtime() - cachedEnvironmentCapturedAtMs <= environmentCacheTtlMillis }
+            ?.takeIf { cachedSnapshot ->
+                val age = SystemClock.elapsedRealtime() - cachedEnvironmentCapturedAtMs
+                val ttl = if (cachedSnapshot.hasUsableWeather()) {
+                    environmentCacheTtlMillis
+                } else {
+                    fallbackEnvironmentCacheTtlMillis
+                }
+                age <= ttl
+            }
             ?.let { cachedSnapshot ->
                 return cachedSnapshot.copy(
                     currentTime = currentTime,
@@ -90,9 +103,18 @@ class DecisionEnvironmentRepository(
                 )
             }
 
-        val location = getCurrentLocationSnapshot()
-        val weather = withContext(Dispatchers.IO) {
-            fetchWeatherSnapshot(location.latitude, location.longitude)
+        val seedLocation = cachedLocationSnapshot ?: UserLocationSnapshot(
+            label = fallbackLocation.label,
+            latitude = fallbackLocation.latitude,
+            longitude = fallbackLocation.longitude,
+            source = fallbackLocation.source
+        )
+        val (location, weather) = coroutineScope {
+            val weatherDeferred = async(Dispatchers.IO) {
+                fetchWeatherSnapshot(seedLocation.latitude, seedLocation.longitude)
+            }
+            val locationSnapshot = getCurrentLocationSnapshot()
+            locationSnapshot to weatherDeferred.await()
         }
 
         val snapshot = DecisionEnvironmentSnapshot(
@@ -117,10 +139,21 @@ class DecisionEnvironmentRepository(
     fun getCachedOrFallbackEnvironmentSnapshot(): DecisionEnvironmentSnapshot {
         val currentTime = ZonedDateTime.now(wuhanZone)
         cachedEnvironmentSnapshot?.let { cachedSnapshot ->
-            return cachedSnapshot.copy(
+            val refreshedSnapshot = cachedSnapshot.copy(
                 currentTime = currentTime,
                 currentTimeLabel = currentTime.format(timeFormatter)
             )
+            if (refreshedSnapshot.hasUsableWeather()) {
+                return refreshedSnapshot
+            }
+
+            val cachedWeather = lastKnownWeatherSnapshot(reason = "cached environment fallback")
+            return cachedWeather?.let { weather ->
+                refreshedSnapshot.copy(
+                    weatherCondition = weather.description,
+                    weatherSource = weather.source
+                )
+            } ?: refreshedSnapshot
         }
 
         return fallbackEnvironmentSnapshot(currentTime)
@@ -263,6 +296,13 @@ class DecisionEnvironmentRepository(
     }
 
     private suspend fun fetchWeatherSnapshot(latitude: Double, longitude: Double): WeatherSnapshot {
+        cachedWeatherSnapshot
+            ?.takeIf { SystemClock.elapsedRealtime() - cachedWeatherCapturedAtMs <= weatherCacheTtlMillis }
+            ?.let { weatherSnapshot ->
+                Log.d(TAG, "weather source=memory description=${weatherSnapshot.description}")
+                return weatherSnapshot.copy(source = "memory")
+            }
+
         val weatherSnapshot = withTimeoutOrNull(weatherRequestTimeoutMillis) {
             runCatching {
                 val currentWeather = weatherApiService.getCurrentWeather(
@@ -285,8 +325,11 @@ class DecisionEnvironmentRepository(
                 WeatherSnapshot(
                     description = description,
                     source = "open-meteo"
-                )
+                ).also(::cacheWeather)
             }.getOrElse { throwable ->
+                if (throwable is CancellationException) {
+                    throw throwable
+                }
                 Log.d(TAG, "weather source=fallback because ${throwable.message}")
                 lastKnownWeatherSnapshot(reason = throwable.message ?: "request failed") ?: WeatherSnapshot(
                     description = "\u5929\u6c14\u672a\u77e5",
@@ -305,6 +348,16 @@ class DecisionEnvironmentRepository(
     }
 
     private fun lastKnownWeatherSnapshot(reason: String): WeatherSnapshot? {
+        cachedWeatherSnapshot
+            ?.takeIf { it.description != "\u5929\u6c14\u672a\u77e5" }
+            ?.let { weatherSnapshot ->
+                Log.d(
+                    TAG,
+                    "weather source=cache description=${weatherSnapshot.description} because $reason"
+                )
+                return weatherSnapshot.copy(source = "cache")
+            }
+
         val cachedSnapshot = cachedEnvironmentSnapshot ?: return null
         if (
             cachedSnapshot.weatherCondition == "\u5929\u6c14\u672a\u77e5" ||
@@ -394,6 +447,18 @@ class DecisionEnvironmentRepository(
     private fun cacheEnvironment(snapshot: DecisionEnvironmentSnapshot) {
         cachedEnvironmentSnapshot = snapshot
         cachedEnvironmentCapturedAtMs = SystemClock.elapsedRealtime()
+        if (
+            snapshot.weatherCondition != "\u5929\u6c14\u672a\u77e5" &&
+            snapshot.weatherSource != "fallback" &&
+            snapshot.weatherSource != "timeout_fallback"
+        ) {
+            cacheWeather(
+                WeatherSnapshot(
+                    description = snapshot.weatherCondition,
+                    source = snapshot.weatherSource
+                )
+            )
+        }
         cacheLocation(
             UserLocationSnapshot(
                 label = snapshot.userLocationLabel,
@@ -411,17 +476,29 @@ class DecisionEnvironmentRepository(
             longitude = fallbackLocation.longitude,
             source = fallbackLocation.source
         )
+        val cachedWeather = lastKnownWeatherSnapshot(reason = "environment fallback")
 
         return DecisionEnvironmentSnapshot(
             currentTime = currentTime,
             currentTimeLabel = currentTime.format(timeFormatter),
-            weatherCondition = "\u5929\u6c14\u672a\u77e5",
+            weatherCondition = cachedWeather?.description ?: "\u5929\u6c14\u672a\u77e5",
             userLocationLabel = location.label,
             latitude = location.latitude,
             longitude = location.longitude,
             locationSource = location.source,
-            weatherSource = "fallback"
+            weatherSource = cachedWeather?.source ?: "fallback"
         )
+    }
+
+    private fun cacheWeather(weatherSnapshot: WeatherSnapshot) {
+        cachedWeatherSnapshot = weatherSnapshot
+        cachedWeatherCapturedAtMs = SystemClock.elapsedRealtime()
+    }
+
+    private fun DecisionEnvironmentSnapshot.hasUsableWeather(): Boolean {
+        return weatherCondition != "\u5929\u6c14\u672a\u77e5" &&
+            weatherSource != "fallback" &&
+            weatherSource != "timeout_fallback"
     }
 
     private data class LocationSnapshot(
@@ -441,19 +518,21 @@ class DecisionEnvironmentRepository(
         private const val amapLocationTimeoutMillis = 1_600L
         private const val routeLocationTimeoutMillis = 6_000L
         private const val systemLocationTimeoutMillis = 900L
-        private const val weatherRequestTimeoutMillis = 3_200L
+        private const val weatherRequestTimeoutMillis = 4_500L
         private const val locationCacheTtlMillis = 5 * 60 * 1000L
         private const val environmentCacheTtlMillis = 2 * 60 * 1000L
+        private const val fallbackEnvironmentCacheTtlMillis = 8_000L
+        private const val weatherCacheTtlMillis = 45 * 60 * 1000L
 
         private val timeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
         private val wuhanZone = ZoneId.of("Asia/Shanghai")
         private const val currentLocationLabel = "\u5f53\u524d\u4f4d\u7f6e\u9644\u8fd1"
 
         private val fallbackLocation = LocationSnapshot(
-            label = "\u6b66\u6c49\u5e02\u6c5f\u6c49\u533a",
-            latitude = 30.5928,
-            longitude = 114.3055,
-            source = "wuhan_fallback"
+            label = "\u6b66\u5927\u4e0e\u6e56\u5927\u4e4b\u95f4",
+            latitude = 30.5609,
+            longitude = 114.3552,
+            source = "wuda_huda_midpoint_fallback"
         )
     }
 }

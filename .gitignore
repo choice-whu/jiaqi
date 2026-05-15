@@ -6,3 +6,8 @@
 /captures/
 /.DS_Store
 app/build/
+artifacts/
+*.png
+window*.xml
+signingReport.txt
+prd_extracted.txt

@@ -1,7 +1,9 @@
 package com.example.dateapp.data.remote
 
+import okhttp3.OkHttpClient
 import retrofit2.http.GET
 import retrofit2.http.Query
+import java.util.concurrent.TimeUnit
 
 interface WeatherApiService {
 
@@ -39,8 +41,18 @@ object WeatherNetworkModule {
     val apiService: WeatherApiService by lazy {
         retrofit2.Retrofit.Builder()
             .baseUrl(WEATHER_BASE_URL)
+            .client(okHttpClient)
             .addConverterFactory(retrofit2.converter.gson.GsonConverterFactory.create())
             .build()
             .create(WeatherApiService::class.java)
+    }
+
+    private val okHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .callTimeout(6, TimeUnit.SECONDS)
+            .connectTimeout(3, TimeUnit.SECONDS)
+            .readTimeout(5, TimeUnit.SECONDS)
+            .writeTimeout(3, TimeUnit.SECONDS)
+            .build()
     }
 }

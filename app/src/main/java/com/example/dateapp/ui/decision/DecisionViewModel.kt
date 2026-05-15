@@ -8,12 +8,16 @@ import com.example.dateapp.data.WishRepository
 import com.example.dateapp.data.decision.DecisionEngine
 import com.example.dateapp.data.decision.DecisionEngineCandidate
 import com.example.dateapp.data.decision.DecisionEngineRequest
+import com.example.dateapp.data.decision.DecisionNameMatcher
 import com.example.dateapp.data.decision.DecisionWeatherProfile
 import com.example.dateapp.data.environment.DecisionEnvironmentRepository
 import com.example.dateapp.data.environment.DecisionEnvironmentSnapshot
 import com.example.dateapp.data.local.WishItem
 import com.example.dateapp.data.remote.AiDecisionRecommendation
 import com.example.dateapp.data.recommendation.RecommendationFeedbackStore
+import com.example.dateapp.data.recommendation.RecommendationPreferenceProfile
+import com.example.dateapp.data.recommendation.RecommendationTopic
+import com.example.dateapp.data.recommendation.RecommendationTopicProvider
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,6 +25,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import android.os.SystemClock
@@ -72,29 +77,39 @@ class DecisionViewModel(
     private val repository: WishRepository,
     private val decisionEngine: DecisionEngine,
     private val environmentRepository: DecisionEnvironmentRepository,
-    private val recommendationFeedbackStore: RecommendationFeedbackStore
+    private val recommendationFeedbackStore: RecommendationFeedbackStore,
+    private val recommendationTopicProvider: RecommendationTopicProvider
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DecisionUiState())
     val uiState: StateFlow<DecisionUiState> = _uiState.asStateFlow()
 
     private var latestLocalWishes: List<WishItem> = emptyList()
-    private var cachedEnvironmentSnapshot: DecisionEnvironmentSnapshot? = null
+    private val environmentCache = DecisionEnvironmentCache(
+        environmentRepository = environmentRepository,
+        decisionWeatherLabelProvider = { snapshot -> decisionEngine.buildWeatherProfile(snapshot).label },
+        fastTimeoutMs = ENVIRONMENT_TIMEOUT_MS,
+        memoryTtlMs = VIEWMODEL_ENVIRONMENT_CACHE_TTL_MS,
+        fallbackTtlMs = FALLBACK_ENVIRONMENT_CACHE_TTL_MS
+    )
     private val recentDecisionNames = ArrayDeque<String>().apply {
         addAll(recommendationFeedbackStore.recentRecommendedNames())
     }
     private val dislikedDecisionNames = ArrayDeque<String>().apply {
         addAll(recommendationFeedbackStore.dislikedNames())
     }
+    private val recentTopicIds = ArrayDeque<String>()
     private val recentAiCards = ArrayDeque<DecisionCardUiModel>()
-    private val aiCacheQueues = mutableMapOf(
-        DecisionMode.MEAL.category to ArrayDeque<CachedAiCard>(),
-        DecisionMode.PLAY.category to ArrayDeque<CachedAiCard>()
+    private val readyPool = DecisionReadyPool(
+        maxQueueSize = ACTIVE_CATEGORY_CACHE_TARGET,
+        ttlMs = AI_CACHE_TTL_MS
     )
     private var prefetchJob: Job? = null
     private var prefetchDeferred: Deferred<DecisionCardUiModel?>? = null
+    private var idlePrefetchJob: Job? = null
+    private var prefetchRetryJob: Job? = null
     private var prefetchCategory: String? = null
-    private var cachedEnvironmentCapturedAtMs: Long = 0L
+    private var prefetchBackoffUntilMs: Long = 0L
     private var dislikedMealFeedbackCount = recommendationFeedbackStore.recentCategoryDislikeCount("meal")
     private var dislikedPlayFeedbackCount = recommendationFeedbackStore.recentCategoryDislikeCount("play")
 
@@ -109,7 +124,6 @@ class DecisionViewModel(
         }
 
         prewarmEnvironmentSnapshot()
-        scheduleAiPrefetch()
     }
 
     fun drawAnotherWish() {
@@ -127,8 +141,9 @@ class DecisionViewModel(
             return
         }
 
+        cancelBackgroundPrefetch()
         _uiState.update { it.copy(decisionMode = mode) }
-        scheduleAiPrefetch(force = true)
+        scheduleAiPrefetchAfterIdle(force = true)
     }
 
     fun insertDemoWishes() {
@@ -201,7 +216,8 @@ class DecisionViewModel(
         rememberNotInterested(card)
         recommendationFeedbackStore.recordNotInterested(
             title = card.title,
-            category = card.category
+            category = card.category,
+            tag = card.preferenceSignalText()
         )
         dislikedMealFeedbackCount = recommendationFeedbackStore.recentCategoryDislikeCount("meal")
         dislikedPlayFeedbackCount = recommendationFeedbackStore.recentCategoryDislikeCount("play")
@@ -242,7 +258,7 @@ class DecisionViewModel(
                     isAiSearching = false
                 )
             }
-            scheduleAiPrefetch(force = true)
+            schedulePrefetchAfterForegroundDecision()
             return
         }
 
@@ -256,15 +272,26 @@ class DecisionViewModel(
                     isAiSearching = false
                 )
             }
-            scheduleAiPrefetch(force = true)
+            schedulePrefetchAfterForegroundDecision()
             return
         }
+
+        cancelBackgroundPrefetch()
 
         val environment = getFastEnvironmentSnapshot()
 
         Log.d(
             TAG,
             "decision source=AI_START time=${environment.currentTimeLabel} weather=${environment.weatherCondition} location=${environment.userLocationLabel} targetCategory=$targetCategory locationSource=${environment.locationSource} weatherSource=${environment.weatherSource}"
+        )
+        val preferenceProfile = preferenceProfileFor(
+            category = targetCategory,
+            hour = environment.currentTime.hour
+        )
+        val recommendationTopic = pickRecommendationTopic(
+            category = targetCategory,
+            environment = environment,
+            preferenceProfile = preferenceProfile
         )
 
         val decisionResult = decisionEngine.generateAiDecision(
@@ -275,10 +302,8 @@ class DecisionViewModel(
                 currentCardName = _uiState.value.selectedCard?.title,
                 hardAvoidNames = hardAvoidNames(),
                 nearbyMallName = null,
-                preferenceProfile = preferenceProfileFor(
-                    category = targetCategory,
-                    hour = environment.currentTime.hour
-                )
+                preferenceProfile = preferenceProfile,
+                recommendationTopic = recommendationTopic
             )
         ).getOrElse { throwable ->
             handleAiFailure(
@@ -314,7 +339,7 @@ class DecisionViewModel(
 
         Log.d(
             TAG,
-            "decision source=AI_SUCCESS time=${environment.currentTimeLabel} weather=${environment.weatherCondition} location=${environment.userLocationLabel} targetCategory=$targetCategory name=${recommendation.name} tag=${recommendation.tag} aiDistance=${recommendation.distanceDescription} verifiedDistance=${resolvedPlace.distanceLabel} placeConfidence=${resolvedPlace.confidence} candidates=${decisionResult.candidateCount}"
+            "decision source=AI_SUCCESS time=${environment.currentTimeLabel} weather=${environment.weatherCondition} location=${environment.userLocationLabel} targetCategory=$targetCategory topic=${recommendationTopic?.label} name=${recommendation.name} tag=${recommendation.tag} aiDistance=${recommendation.distanceDescription} verifiedDistance=${resolvedPlace.distanceLabel} placeConfidence=${resolvedPlace.confidence} candidates=${decisionResult.candidateCount}"
         )
 
         rememberAiCard(aiCard)
@@ -326,21 +351,42 @@ class DecisionViewModel(
                 isAiSearching = false
             )
         }
-        scheduleAiPrefetch(force = true)
+        schedulePrefetchAfterForegroundDecision()
+    }
+
+    private fun schedulePrefetchAfterForegroundDecision() {
+        prefetchBackoffUntilMs = SystemClock.elapsedRealtime() + FOREGROUND_DECISION_PREFETCH_DELAY_MS
+        scheduleAiPrefetchAfterIdle(delayMillis = FOREGROUND_DECISION_PREFETCH_DELAY_MS)
+    }
+
+    private fun cancelBackgroundPrefetch() {
+        idlePrefetchJob?.cancel()
+        idlePrefetchJob = null
+        prefetchRetryJob?.cancel()
+        prefetchRetryJob = null
+        prefetchDeferred = null
+        prefetchJob?.cancel()
+        prefetchJob = null
+        prefetchCategory = null
     }
 
     private fun prewarmEnvironmentSnapshot() {
         viewModelScope.launch {
-            val warmedSnapshot = withTimeoutOrNull(ENVIRONMENT_PREWARM_TIMEOUT_MS) {
-                environmentRepository.getEnvironmentSnapshot()
-            } ?: environmentRepository.getCachedOrFallbackEnvironmentSnapshot()
-            cacheEnvironmentSnapshot(warmedSnapshot)
-            scheduleAiPrefetch(force = true)
+            environmentCache.prewarm(ENVIRONMENT_PREWARM_TIMEOUT_MS)
         }
     }
 
     private fun scheduleAiPrefetch(force: Boolean = false) {
         pruneExpiredCachedCards()
+        val now = SystemClock.elapsedRealtime()
+        val canBypassBackoff = force && cacheSize(_uiState.value.decisionMode.category) == 0
+        if (!canBypassBackoff && now < prefetchBackoffUntilMs) {
+            Log.d(
+                TAG,
+                "decision source=READY_POOL_BACKOFF remaining=${prefetchBackoffUntilMs - now}ms"
+            )
+            return
+        }
         if (_uiState.value.isAiSearching) {
             return
         }
@@ -352,6 +398,15 @@ class DecisionViewModel(
         prefetchCategory = targetCategory
         val deferred = viewModelScope.async {
             val environment = getFastEnvironmentSnapshot()
+            val preferenceProfile = preferenceProfileFor(
+                category = targetCategory,
+                hour = environment.currentTime.hour
+            )
+            val recommendationTopic = pickRecommendationTopic(
+                category = targetCategory,
+                environment = environment,
+                preferenceProfile = preferenceProfile
+            )
             val result = decisionEngine.generateAiDecision(
                 DecisionEngineRequest(
                     environment = environment,
@@ -361,10 +416,8 @@ class DecisionViewModel(
                     hardAvoidNames = hardAvoidNames(),
                     nearbyMallName = null,
                     useCandidateBatch = true,
-                    preferenceProfile = preferenceProfileFor(
-                        category = targetCategory,
-                        hour = environment.currentTime.hour
-                    )
+                    preferenceProfile = preferenceProfile,
+                    recommendationTopic = recommendationTopic
                 )
             )
 
@@ -381,14 +434,22 @@ class DecisionViewModel(
                         storedCount += 1
                     }
                 }
+                prefetchBackoffUntilMs = SystemClock.elapsedRealtime() + if (cacheSize(targetCategory) >= cacheTargetSize(targetCategory)) {
+                    PREFETCH_FULL_COOLDOWN_MS
+                } else if (storedCount > 0) {
+                    PREFETCH_SUCCESS_COOLDOWN_MS
+                } else {
+                    PREFETCH_EMPTY_RESULT_COOLDOWN_MS
+                }
                 Log.d(
                     TAG,
-                    "decision source=AI_CACHE_READY targetCategory=$targetCategory stored=$storedCount batch=${cards.size} candidates=${decisionResult.candidateCount} cache=${cacheSize(targetCategory)}"
+                    "decision source=READY_POOL_FILLED targetCategory=$targetCategory topic=${recommendationTopic.label} stored=$storedCount batch=${cards.size} candidates=${decisionResult.candidateCount} ready=${cacheSize(targetCategory)}"
                 )
             }.onFailure { throwable ->
+                schedulePrefetchRetryAfterFailure()
                 Log.d(
                     TAG,
-                    "decision source=AI_CACHE_FAILED targetCategory=$targetCategory reason=${throwable.message ?: throwable.javaClass.simpleName}"
+                    "decision source=READY_POOL_FAILED targetCategory=$targetCategory reason=${throwable.message ?: throwable.javaClass.simpleName}"
                 )
             }
             firstStoredCard
@@ -411,6 +472,33 @@ class DecisionViewModel(
         }
     }
 
+    private fun scheduleAiPrefetchAfterIdle(
+        force: Boolean = false,
+        delayMillis: Long = MODE_SWITCH_PREFETCH_DELAY_MS
+    ) {
+        idlePrefetchJob?.cancel()
+        idlePrefetchJob = viewModelScope.launch {
+            delay(delayMillis)
+            if (!_uiState.value.isAiSearching) {
+                scheduleAiPrefetch(force = force)
+            }
+        }
+    }
+
+    private fun schedulePrefetchRetryAfterFailure() {
+        val now = SystemClock.elapsedRealtime()
+        prefetchBackoffUntilMs = now + PREFETCH_FAILURE_BACKOFF_MS
+        if (prefetchRetryJob?.isActive == true) {
+            return
+        }
+        prefetchRetryJob = viewModelScope.launch {
+            delay(PREFETCH_FAILURE_BACKOFF_MS)
+            if (!_uiState.value.isAiSearching) {
+                scheduleAiPrefetch()
+            }
+        }
+    }
+
     private fun nextPrefetchCategory(force: Boolean): String? {
         val activeCategory = _uiState.value.decisionMode.category
         val categories = listOf(
@@ -418,13 +506,30 @@ class DecisionViewModel(
             DecisionMode.MEAL.category,
             DecisionMode.PLAY.category
         ).distinct()
-        return categories.firstOrNull { category ->
-            val targetSize = if (category == activeCategory) {
-                ACTIVE_CATEGORY_CACHE_TARGET
+        val underfilledCategory = categories.firstOrNull { category ->
+            val minimumReadySize = if (category == activeCategory) {
+                ACTIVE_CATEGORY_MIN_READY
             } else {
-                BACKGROUND_CATEGORY_CACHE_TARGET
+                BACKGROUND_CATEGORY_MIN_READY
             }
-            force || cacheSize(category) < targetSize
+            cacheSize(category) < minimumReadySize
+        }
+        if (underfilledCategory != null) {
+            return underfilledCategory
+        }
+
+        return if (force) {
+            categories.minByOrNull { category -> cacheSize(category) }
+        } else {
+            null
+        }
+    }
+
+    private fun cacheTargetSize(category: String): Int {
+        return if (category == _uiState.value.decisionMode.category) {
+            ACTIVE_CATEGORY_CACHE_TARGET
+        } else {
+            BACKGROUND_CATEGORY_CACHE_TARGET
         }
     }
 
@@ -445,7 +550,8 @@ class DecisionViewModel(
         ) {
             consumePrefetchedAiCard(targetCategory) ?: card.copy(
                 id = "ai_prefetch_${System.currentTimeMillis()}",
-                momentLabel = buildMomentLabel(currentHour(), targetCategory)
+                momentLabel = buildMomentLabel(currentHour(), targetCategory),
+                supportingText = refineCachedSupportingText(card)
             )
         } else {
             null
@@ -453,52 +559,30 @@ class DecisionViewModel(
     }
 
     private fun consumePrefetchedAiCard(targetCategory: String): DecisionCardUiModel? {
-        pruneExpiredCachedCards()
-        val currentTitle = _uiState.value.selectedCard?.title
-        val queue = aiCacheQueues.getOrPut(targetCategory) { ArrayDeque() }
-        val index = queue.indexOfFirst { cachedCard ->
-            val card = cachedCard.card
-            card.category == targetCategory &&
-                !isSimilarPlaceName(card.title, currentTitle.orEmpty()) &&
-                dislikedDecisionNames.none { dislikedName -> isSimilarPlaceName(card.title, dislikedName) }
-        }
-        if (index < 0) {
-            return null
-        }
+        val card = readyPool.consume(
+            targetCategory = targetCategory,
+            currentTitle = _uiState.value.selectedCard?.title,
+            dislikedNames = dislikedDecisionNames.toList(),
+            activeEnvironmentKey = environmentCache.activeEnvironmentKey(),
+            currentHour = currentHour()
+        ) ?: return null
 
-        val card = queue.removeAt(index).card
-        Log.d(
-            TAG,
-            "decision source=AI_CACHE_HIT targetCategory=$targetCategory title=${card.title} remaining=${queue.size}"
-        )
         return card.copy(
             id = "ai_cache_${System.currentTimeMillis()}",
-            momentLabel = buildMomentLabel(currentHour(), targetCategory)
+            momentLabel = buildMomentLabel(currentHour(), targetCategory),
+            supportingText = refineCachedSupportingText(card)
         )
     }
 
     private fun storeCachedAiCard(card: DecisionCardUiModel): Boolean {
-        val queue = aiCacheQueues.getOrPut(card.category) { ArrayDeque() }
-        if (
-            queue.any { isSimilarPlaceName(card.title, it.card.title) } ||
-            recentDecisionNames.any { isSimilarPlaceName(card.title, it) } ||
-            dislikedDecisionNames.any { isSimilarPlaceName(card.title, it) }
-        ) {
-            Log.d(TAG, "decision source=AI_CACHE_SKIP_REPEAT targetCategory=${card.category} title=${card.title}")
-            return false
-        }
-
-        queue.addLast(
-            CachedAiCard(
-                card = card,
-                cachedAtMs = SystemClock.elapsedRealtime(),
-                environmentKey = cacheEnvironmentKey(cachedEnvironmentSnapshot)
-            )
+        return readyPool.store(
+            card = card.copy(supportingText = refineCachedSupportingText(card)),
+            currentTitle = _uiState.value.selectedCard?.title,
+            recentNames = recentDecisionNames.toList(),
+            dislikedNames = dislikedDecisionNames.toList(),
+            environmentKey = environmentCache.activeEnvironmentKey(),
+            currentHour = currentHour()
         )
-        while (queue.size > ACTIVE_CATEGORY_CACHE_TARGET) {
-            queue.removeFirst()
-        }
-        return true
     }
 
     private fun recordPositivePreference(
@@ -508,15 +592,29 @@ class DecisionViewModel(
         recommendationFeedbackStore.recordPositiveFeedback(
             title = card.title,
             category = card.category,
-            tag = card.tag,
+            tag = card.preferenceSignalText(),
             action = action
         )
+    }
+
+    private fun DecisionCardUiModel.preferenceSignalText(): String {
+        return listOfNotNull(
+            tag,
+            supportingText,
+            locationLabel,
+            routeKeyword,
+            contextLine
+        )
+            .joinToString(" ")
+            .trim()
+            .takeIf { it.isNotEmpty() }
+            ?: title
     }
 
     private fun preferenceProfileFor(
         category: String,
         hour: Int? = null
-    ): com.example.dateapp.data.recommendation.RecommendationPreferenceProfile {
+    ): RecommendationPreferenceProfile {
         val profile = recommendationFeedbackStore.preferenceProfile(
             category = category,
             hour = hour
@@ -530,67 +628,49 @@ class DecisionViewModel(
         return profile
     }
 
-    private fun dropCachedCardsMatching(name: String) {
-        aiCacheQueues.values.forEach { queue ->
-            queue.removeAll { isSimilarPlaceName(it.card.title, name) }
+    private fun pickRecommendationTopic(
+        category: String,
+        environment: DecisionEnvironmentSnapshot,
+        preferenceProfile: RecommendationPreferenceProfile
+    ): RecommendationTopic {
+        val selection = recommendationTopicProvider.pickTopicSelection(
+            category = category,
+            recentTopicIds = recentTopicIds,
+            hour = environment.currentTime.hour,
+            weatherCondition = environment.weatherCondition,
+            preferenceProfile = preferenceProfile
+        )
+        val topic = selection.topic
+        rememberTopic(topic)
+        Log.d(
+            TAG,
+            "decision source=TOPIC_PICK category=$category topic=${topic.label} weight=${selection.weight} candidates=${selection.candidateCount} cooled=${selection.cooledTopicCount} recent=${recentTopicIds.joinToString(limit = 6)}"
+        )
+        return topic
+    }
+
+    private fun rememberTopic(topic: RecommendationTopic) {
+        recentTopicIds.removeAll { topicId -> topicId == topic.id }
+        recentTopicIds.addLast(topic.id)
+        while (recentTopicIds.size > RECENT_TOPIC_MEMORY) {
+            recentTopicIds.removeFirst()
         }
+    }
+
+    private fun dropCachedCardsMatching(name: String) {
+        readyPool.dropMatching(name)
     }
 
     private fun pruneExpiredCachedCards() {
-        val now = SystemClock.elapsedRealtime()
-        val activeEnvironmentKey = cacheEnvironmentKey(cachedEnvironmentSnapshot)
-        aiCacheQueues.values.forEach { queue ->
-            queue.removeAll { cachedCard ->
-                now - cachedCard.cachedAtMs > AI_CACHE_TTL_MS ||
-                    cachedCard.environmentKey != activeEnvironmentKey
-            }
-        }
+        readyPool.pruneExpired(environmentCache.activeEnvironmentKey())
     }
 
     private fun cacheSize(category: String): Int {
-        return aiCacheQueues[category]?.size ?: 0
+        return readyPool.cacheSize(category)
     }
-
-    private fun cacheEnvironmentKey(snapshot: DecisionEnvironmentSnapshot?): String {
-        if (snapshot == null) {
-            return "unknown"
-        }
-        val latBucket = (snapshot.latitude * 100).toInt()
-        val lonBucket = (snapshot.longitude * 100).toInt()
-        val hourBucket = snapshot.currentTime.hour / 3
-        val weatherBucket = decisionEngine.buildWeatherProfile(snapshot).label
-        return "$latBucket:$lonBucket:$hourBucket:$weatherBucket"
-    }
-
-    private data class CachedAiCard(
-        val card: DecisionCardUiModel,
-        val cachedAtMs: Long,
-        val environmentKey: String
-    )
 
     private suspend fun getFastEnvironmentSnapshot(): DecisionEnvironmentSnapshot {
-        cachedEnvironmentSnapshot
-            ?.takeIf { SystemClock.elapsedRealtime() - cachedEnvironmentCapturedAtMs <= VIEWMODEL_ENVIRONMENT_CACHE_TTL_MS }
-            ?.let { cachedSnapshot ->
-                val currentTime = ZonedDateTime.now(appZoneId)
-                return cachedSnapshot.copy(
-                    currentTime = currentTime,
-                    currentTimeLabel = currentTime.format(fullTimeFormatter)
-                )
-            }
-
-        val fallbackEnvironment = cachedEnvironmentSnapshot
-            ?: environmentRepository.getCachedOrFallbackEnvironmentSnapshot()
-        val environment = withTimeoutOrNull(ENVIRONMENT_TIMEOUT_MS) {
-            environmentRepository.getEnvironmentSnapshot()
-        } ?: fallbackEnvironment
-        cacheEnvironmentSnapshot(environment)
-        return environment
-    }
-
-    private fun cacheEnvironmentSnapshot(snapshot: DecisionEnvironmentSnapshot) {
-        cachedEnvironmentSnapshot = snapshot
-        cachedEnvironmentCapturedAtMs = SystemClock.elapsedRealtime()
+        return environmentCache.getFastSnapshot()
     }
 
     private fun com.example.dateapp.data.decision.DecisionEngineResult.toAiCard(
@@ -673,7 +753,6 @@ class DecisionViewModel(
                 isAiSearching = false
             )
         }
-        scheduleAiPrefetch()
     }
 
     private fun rememberAiCard(card: DecisionCardUiModel) {
@@ -726,15 +805,17 @@ class DecisionViewModel(
 
     private fun recentAvoidNames(): List<String> {
         val currentTitle = _uiState.value.selectedCard?.title
-        return (recentDecisionNames.toList() + dislikedDecisionNames.toList() + listOfNotNull(currentTitle))
+        val recentExactRepeats = recentDecisionNames.toList().takeLast(RECENT_PROMPT_AVOID_MEMORY)
+        val explicitDislikes = dislikedDecisionNames.toList().takeLast(DISLIKED_PROMPT_AVOID_MEMORY)
+        return (listOfNotNull(currentTitle) + explicitDislikes + recentExactRepeats)
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .distinct()
-            .takeLast(RECENT_RECOMMENDATION_MEMORY + DISLIKED_RECOMMENDATION_MEMORY)
+            .takeLast(PROMPT_AVOID_NAME_LIMIT)
     }
 
     private fun hardAvoidNames(): List<String> {
-        return dislikedDecisionNames.toList().takeLast(HARD_DISLIKED_RECOMMENDATION_MEMORY)
+        return dislikedDecisionNames.toList().takeLast(HARD_DISLIKED_PROMPT_MEMORY)
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .distinct()
@@ -744,25 +825,11 @@ class DecisionViewModel(
         first: String,
         second: String
     ): Boolean {
-        val normalizedFirst = normalizePlaceName(first)
-        val normalizedSecond = normalizePlaceName(second)
-        if (normalizedFirst.length < 2 || normalizedSecond.length < 2) {
-            return false
-        }
-
-        return normalizedFirst.contains(normalizedSecond) ||
-            normalizedSecond.contains(normalizedFirst)
+        return DecisionNameMatcher.isSimilarPlaceName(first, second)
     }
 
     private fun normalizePlaceName(name: String): String {
-        return name.lowercase()
-            .replace(Regex("[\\s\\p{Punct}（）()【】\\[\\]「」『』《》“”‘’、，。！？；：·-]"), "")
-            .replace("武汉", "")
-            .replace("湖北", "")
-            .replace("旗舰", "")
-            .replace("总", "")
-            .replace("分", "")
-            .replace("店", "")
+        return DecisionNameMatcher.normalizePlaceName(name)
     }
 
     private fun buildMomentLabel(hour: Int, category: String): String {
@@ -770,7 +837,7 @@ class DecisionViewModel(
             hour in 0..4 -> if (category == "meal") "宵夜时刻" else "夜色去处"
             hour in 5..9 -> if (category == "meal") "早餐灵感" else "清晨去处"
             hour in 10..13 -> if (category == "meal") "饭点推荐" else "午间去处"
-            hour in 14..17 -> if (category == "meal") "下午茶时刻" else "下午安排"
+            hour in 14..17 -> if (category == "meal") "餐饮灵感" else "下午安排"
             hour in 18..20 -> if (category == "meal") "晚餐安排" else "傍晚去处"
             hour in 21..23 -> if (category == "meal") "夜宵备选" else "夜晚安排"
             else -> if (category == "meal") "这一顿" else "这一站"
@@ -787,6 +854,26 @@ class DecisionViewModel(
             "一家适合当下坐下来吃饭的店，节奏轻松，适合慢慢把这一餐吃完。"
         } else {
             "一个适合现在去逛逛的去处，拍照、走走或短暂停留都会很舒服。"
+        }
+    }
+
+    private fun refineCachedSupportingText(card: DecisionCardUiModel): String {
+        val text = card.preferenceSignalText().lowercase()
+        return when {
+            card.category == DecisionMode.PLAY.category &&
+                containsAnySignal(text, "艺术空间", "美术馆", "艺术馆", "画廊", "展览", "展馆", "sart") ->
+                "展陈安静，适合慢慢看。"
+            card.category == DecisionMode.PLAY.category &&
+                containsAnySignal(text, "桌游", "私影", "ps5", "switch", "电玩", "密室", "剧本", "vr") ->
+                "互动感更强，适合一起玩。"
+            card.category == DecisionMode.PLAY.category &&
+                containsAnySignal(text, "唱片", "黑胶", "中古", "买手", "生活方式", "潮玩", "盲盒") ->
+                "小物件好逛，适合随手发现。"
+            card.category == DecisionMode.MEAL.category &&
+                currentHour() in 14..17 &&
+                containsAnySignal(text, "饺子", "云饺", "水饺") ->
+                "热乎轻松，想吃点咸口也稳。"
+            else -> card.supportingText
         }
     }
 
@@ -838,6 +925,8 @@ class DecisionViewModel(
     private fun recommendationSignalText(recommendation: AiDecisionRecommendation): String {
         return buildString {
             append(recommendation.name)
+            append(' ')
+            append(recommendation.amapSearchKeyword.orEmpty())
             append(' ')
             append(recommendation.distanceDescription.orEmpty())
             append(' ')
@@ -904,6 +993,7 @@ class DecisionViewModel(
         )
 
         val fallbackCandidates = latestLocalWishes
+            .filter { wish -> wish.category == targetCategory }
             .filterNot { wish -> isSimilarPlaceName(wish.title, currentTitle.orEmpty()) }
             .map { wish ->
                 ScoredWish(
@@ -919,8 +1009,8 @@ class DecisionViewModel(
                 )
             }
             .sortedWith(
-                compareByDescending<ScoredWish> { it.personalizationScore }
-                    .thenByDescending { it.matchesTargetCategory }
+                compareByDescending<ScoredWish> { it.matchesTargetCategory }
+                    .thenByDescending { it.personalizationScore }
                     .thenBy { it.recentlyRecommended }
                     .thenByDescending { it.wish.addedTimestamp }
             )
@@ -928,7 +1018,6 @@ class DecisionViewModel(
 
         val localWish = fallbackCandidates
             .firstOrNull { wish -> !isStrongDislikedLocalMatch(wish, dislikedDecisionNames) }
-            ?: fallbackCandidates.firstOrNull()
             ?: return null
 
         Log.d(
@@ -968,14 +1057,44 @@ class DecisionViewModel(
             weatherProfile.isFoggy
         val area = environment.userLocationLabel
         val nearbyArea = area.removeSuffix("附近")
-        val fallbackTitle = when {
-            targetCategory == "meal" -> "在${nearbyArea}附近找一家近一点的舒服小店"
-            indoorPreferred -> "去${nearbyArea}附近找个室内小去处"
-            environment.currentTime.hour in 5..10 -> "去${nearbyArea}附近找个清爽的早间去处"
-            environment.currentTime.hour in 16..19 -> "去${nearbyArea}附近找个适合傍晚逛逛的去处"
-            environment.currentTime.hour in 20..23 -> "去${nearbyArea}附近找个晚上也热闹的小去处"
-            else -> "去${nearbyArea}附近找个轻松好玩的去处"
+        val fallbackTitleCandidates = when {
+            targetCategory == "meal" -> listOf(
+                "在${nearbyArea}附近找一家近一点的舒服小店",
+                "在${nearbyArea}附近找一家不用走太远的热乎小店",
+                "在${nearbyArea}附近找一家安静好坐的餐饮小店"
+            )
+            indoorPreferred -> listOf(
+                "去${nearbyArea}附近找个室内小去处",
+                "去${nearbyArea}附近找个能慢慢逛的室内去处",
+                "去${nearbyArea}附近找个遮风避雨的小目的地"
+            )
+            environment.currentTime.hour in 5..10 -> listOf(
+                "去${nearbyArea}附近找个清爽的早间去处",
+                "去${nearbyArea}附近找个上午开放的小去处",
+                "去${nearbyArea}附近找个适合慢慢醒来的地方"
+            )
+            environment.currentTime.hour in 16..19 -> listOf(
+                "去${nearbyArea}附近找个适合傍晚逛逛的去处",
+                "去${nearbyArea}附近找个黄昏前能停一会儿的地方",
+                "去${nearbyArea}附近找个轻松散步的小目的地"
+            )
+            environment.currentTime.hour in 20..23 -> listOf(
+                "去${nearbyArea}附近找个晚上也热闹的小去处",
+                "去${nearbyArea}附近找个夜里还适合待会儿的地方",
+                "去${nearbyArea}附近找个不太折腾的夜间去处"
+            )
+            else -> listOf(
+                "去${nearbyArea}附近找个轻松好玩的去处",
+                "去${nearbyArea}附近找个短暂停留的小目的地",
+                "去${nearbyArea}附近找个不用计划太多的地方"
+            )
         }
+        val emergencyAvoidNames = recentAvoidNames() + dislikedDecisionNames.toList()
+        val fallbackTitle = fallbackTitleCandidates.firstOrNull { candidate ->
+            emergencyAvoidNames.none { avoidName -> isSimilarPlaceName(candidate, avoidName) }
+        } ?: fallbackTitleCandidates[
+            (recentDecisionNames.size + environment.currentTime.minute) % fallbackTitleCandidates.size
+        ]
         val fallbackSupportingText = when {
             targetCategory == "meal" -> "AI 暂时没返回稳定结果，先把范围收回到当前位置附近，优先选少走路、能坐下来的具体小店。"
             indoorPreferred -> "当前天气更适合室内或遮蔽好的安排，先避开长距离户外，把体验留给舒服的部分。"
@@ -1057,20 +1176,32 @@ class DecisionViewModel(
 
     companion object {
         private const val TAG = "DecisionViewModel"
-        private const val ENVIRONMENT_PREWARM_TIMEOUT_MS = 4_200L
+        private const val ENVIRONMENT_PREWARM_TIMEOUT_MS = 8_000L
         private const val ENVIRONMENT_TIMEOUT_MS = 900L
-        private const val ACTIVE_PREFETCH_AWAIT_MS = 7_500L
+        private const val ACTIVE_PREFETCH_AWAIT_MS = 650L
         private const val VIEWMODEL_ENVIRONMENT_CACHE_TTL_MS = 8 * 60 * 1000L
+        private const val FALLBACK_ENVIRONMENT_CACHE_TTL_MS = 8_000L
         private const val AI_CACHE_TTL_MS = 12 * 60 * 1000L
-        private const val ACTIVE_CATEGORY_CACHE_TARGET = 3
-        private const val BACKGROUND_CATEGORY_CACHE_TARGET = 1
+        private const val ACTIVE_CATEGORY_CACHE_TARGET = 8
+        private const val BACKGROUND_CATEGORY_CACHE_TARGET = 4
+        private const val ACTIVE_CATEGORY_MIN_READY = 4
+        private const val BACKGROUND_CATEGORY_MIN_READY = 2
+        private const val FOREGROUND_DECISION_PREFETCH_DELAY_MS = 2_000L
+        private const val MODE_SWITCH_PREFETCH_DELAY_MS = 700L
+        private const val PREFETCH_SUCCESS_COOLDOWN_MS = 4_000L
+        private const val PREFETCH_FULL_COOLDOWN_MS = 20_000L
+        private const val PREFETCH_EMPTY_RESULT_COOLDOWN_MS = 12_000L
+        private const val PREFETCH_FAILURE_BACKOFF_MS = 18_000L
         private const val RECENT_RECOMMENDATION_MEMORY = 36
         private const val DISLIKED_RECOMMENDATION_MEMORY = 64
-        private const val HARD_DISLIKED_RECOMMENDATION_MEMORY = 20
+        private const val RECENT_PROMPT_AVOID_MEMORY = 3
+        private const val DISLIKED_PROMPT_AVOID_MEMORY = 5
+        private const val HARD_DISLIKED_PROMPT_MEMORY = 8
+        private const val PROMPT_AVOID_NAME_LIMIT = 8
+        private const val RECENT_TOPIC_MEMORY = 4
         private const val RECENT_AI_CARD_POOL_SIZE = 8
 
         private val appZoneId = ZoneId.of("Asia/Shanghai")
-        private val fullTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
         private val shortTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
         private val demoWishTemplates = listOf(
@@ -1107,7 +1238,8 @@ class DecisionViewModel(
             repository: WishRepository,
             decisionEngine: DecisionEngine,
             environmentRepository: DecisionEnvironmentRepository,
-            recommendationFeedbackStore: RecommendationFeedbackStore
+            recommendationFeedbackStore: RecommendationFeedbackStore,
+            recommendationTopicProvider: RecommendationTopicProvider
         ): ViewModelProvider.Factory {
             return object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
@@ -1119,7 +1251,8 @@ class DecisionViewModel(
                         repository = repository,
                         decisionEngine = decisionEngine,
                         environmentRepository = environmentRepository,
-                        recommendationFeedbackStore = recommendationFeedbackStore
+                        recommendationFeedbackStore = recommendationFeedbackStore,
+                        recommendationTopicProvider = recommendationTopicProvider
                     ) as T
                 }
             }

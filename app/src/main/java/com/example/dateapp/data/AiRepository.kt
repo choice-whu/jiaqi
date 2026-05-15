@@ -1,30 +1,40 @@
 package com.example.dateapp.data
 
 import com.example.dateapp.data.environment.DecisionEnvironmentSnapshot
+import com.example.dateapp.data.remote.AiChatClient
+import com.example.dateapp.data.remote.AiChatRequest
 import com.example.dateapp.data.remote.AiApiService
 import com.example.dateapp.data.remote.AiDecisionRecommendation
 import com.example.dateapp.data.remote.AiDecisionRecommendationDto
 import com.example.dateapp.data.remote.AiDecisionRecommendationsDto
+import com.example.dateapp.data.remote.AiJsonSanitizer.getStringOrNull
 import com.example.dateapp.data.remote.AiNetworkModule
-import com.example.dateapp.data.remote.ChatMessage
-import com.example.dateapp.data.remote.ChatRequest
 import com.example.dateapp.data.remote.ParsedWish
 import com.example.dateapp.data.remote.ParsedWishDto
 import com.example.dateapp.data.recommendation.RecommendationPreferenceProfile
+import com.example.dateapp.data.recommendation.RecommendationTopic
+import com.example.dateapp.data.route.DecisionPoiCandidate
 import com.google.gson.Gson
 import android.util.Log
-import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
+data class AiPoiChoice(
+    val index: Int,
+    val tag: String?,
+    val intro: String?,
+    val reason: String?
+)
+
 class AiRepository(
     private val apiService: AiApiService,
     private val gson: Gson = Gson(),
     private val model: String = AiNetworkModule.defaultModel,
-    private val decisionModel: String = AiNetworkModule.decisionModel
+    private val decisionModel: String = AiNetworkModule.decisionModel,
+    private val chatClient: AiChatClient = AiChatClient(apiService)
 ) {
 
     suspend fun parseWishIntent(rawText: String): Result<ParsedWish> {
@@ -36,9 +46,12 @@ class AiRepository(
         return withContext(Dispatchers.IO) {
             runAiCatching {
                 val json = requestJsonContent(
+                    systemPrompt = buildWishIntentSystemPrompt(),
                     prompt = buildWishIntentPrompt(normalizedText),
                     maxCompletionTokens = 96,
-                    reasoningEffort = "low"
+                    reasoningEffort = "low",
+                    temperature = 0.05,
+                    presencePenalty = null
                 )
                 val dto = gson.fromJson(json, ParsedWishDto::class.java)
                     ?: error("AI response JSON could not be parsed")
@@ -54,18 +67,24 @@ class AiRepository(
         avoidNames: List<String> = emptyList(),
         nearbyMallName: String? = null,
         preferenceProfile: RecommendationPreferenceProfile? = null,
+        recommendationTopic: RecommendationTopic? = null,
         fastMode: Boolean = true,
         rescueMode: Boolean = false
     ): Result<AiDecisionRecommendation> {
         return withContext(Dispatchers.IO) {
             runAiCatching {
                 val json = requestJsonContent(
+                    systemPrompt = buildDecisionSystemPrompt(
+                        targetCategory = targetCategory,
+                        candidateBatch = false
+                    ),
                     prompt = if (rescueMode) {
                         buildRescueDecisionPromptV2(
                             environment = environment,
                             targetCategory = targetCategory,
                             avoidNames = avoidNames,
-                            preferenceProfile = preferenceProfile
+                            preferenceProfile = preferenceProfile,
+                            recommendationTopic = recommendationTopic
                         )
                     } else if (fastMode) {
                         buildFastDecisionPromptV2(
@@ -74,7 +93,8 @@ class AiRepository(
                             strictTimeMatch = strictTimeMatch,
                             avoidNames = avoidNames,
                             nearbyMallName = nearbyMallName,
-                            preferenceProfile = preferenceProfile
+                            preferenceProfile = preferenceProfile,
+                            recommendationTopic = recommendationTopic
                         )
                     } else {
                         buildDecisionPromptV2(
@@ -83,16 +103,19 @@ class AiRepository(
                             strictTimeMatch = strictTimeMatch,
                             avoidNames = avoidNames,
                             nearbyMallName = nearbyMallName,
-                            preferenceProfile = preferenceProfile
+                            preferenceProfile = preferenceProfile,
+                            recommendationTopic = recommendationTopic
                         )
                     },
                     maxCompletionTokens = when {
                         rescueMode -> 70
-                        fastMode -> 80
+                        fastMode -> 160
                         else -> 150
                     },
                     reasoningEffort = "low",
-                    overrideModel = decisionModel
+                    overrideModel = decisionModel,
+                    temperature = decisionTemperature(targetCategory, candidateBatch = false),
+                    presencePenalty = if (fastMode) null else decisionPresencePenalty(targetCategory)
                 )
                 val dto = gson.fromJson(json, AiDecisionRecommendationDto::class.java)
                     ?: error("AI recommendation JSON could not be parsed")
@@ -110,18 +133,24 @@ class AiRepository(
         avoidNames: List<String> = emptyList(),
         nearbyMallName: String? = null,
         preferenceProfile: RecommendationPreferenceProfile? = null,
+        recommendationTopic: RecommendationTopic? = null,
         fastMode: Boolean = true,
         rescueMode: Boolean = false
     ): Result<List<AiDecisionRecommendation>> {
         return withContext(Dispatchers.IO) {
             runAiCatching {
                 val json = requestJsonContent(
+                    systemPrompt = buildDecisionSystemPrompt(
+                        targetCategory = targetCategory,
+                        candidateBatch = true
+                    ),
                     prompt = if (rescueMode) {
                         buildRescueDecisionCandidatesPromptV2(
                             environment = environment,
                             targetCategory = targetCategory,
                             avoidNames = avoidNames,
-                            preferenceProfile = preferenceProfile
+                            preferenceProfile = preferenceProfile,
+                            recommendationTopic = recommendationTopic
                         )
                     } else if (fastMode) {
                         buildFastDecisionCandidatesPromptV2(
@@ -130,7 +159,8 @@ class AiRepository(
                             strictTimeMatch = strictTimeMatch,
                             avoidNames = avoidNames,
                             nearbyMallName = nearbyMallName,
-                            preferenceProfile = preferenceProfile
+                            preferenceProfile = preferenceProfile,
+                            recommendationTopic = recommendationTopic
                         )
                     } else {
                         buildDecisionCandidatesPromptV2(
@@ -139,21 +169,109 @@ class AiRepository(
                             strictTimeMatch = strictTimeMatch,
                             avoidNames = avoidNames,
                             nearbyMallName = nearbyMallName,
-                            preferenceProfile = preferenceProfile
+                            preferenceProfile = preferenceProfile,
+                            recommendationTopic = recommendationTopic
                         )
                     },
                     maxCompletionTokens = when {
                         rescueMode -> 260
-                        fastMode -> 180
+                        fastMode -> 120
                         else -> 400
                     },
                     reasoningEffort = "low",
-                    overrideModel = decisionModel
+                    overrideModel = decisionModel,
+                    temperature = decisionTemperature(targetCategory, candidateBatch = true),
+                    presencePenalty = decisionPresencePenalty(targetCategory)
                 )
                 parseDecisionCandidates(json).also { recommendations ->
                     Log.d(
                         TAG,
                         "ai source=candidates_success count=${recommendations.size} names=${recommendations.joinToString(limit = 6) { it.name }}"
+                    )
+                }
+            }
+        }
+    }
+
+    suspend fun polishDecisionPoi(
+        environment: DecisionEnvironmentSnapshot,
+        targetCategory: String,
+        poi: DecisionPoiCandidate,
+        recommendationTopic: RecommendationTopic? = null,
+        preferenceProfile: RecommendationPreferenceProfile? = null
+    ): Result<AiDecisionRecommendation> {
+        return withContext(Dispatchers.IO) {
+            runAiCatching {
+                val json = requestJsonContent(
+                    systemPrompt = buildPoiPolishSystemPrompt(),
+                    prompt = buildPoiPolishPrompt(
+                        environment = environment,
+                        targetCategory = targetCategory,
+                        poi = poi,
+                        recommendationTopic = recommendationTopic,
+                        preferenceProfile = preferenceProfile
+                    ),
+                    maxCompletionTokens = 70,
+                    reasoningEffort = "low",
+                    overrideModel = decisionModel,
+                    temperature = 0.32,
+                    presencePenalty = null
+                )
+                val dto = gson.fromJson(json, AiPoiPolishDto::class.java)
+                    ?: error("AI POI polish JSON could not be parsed")
+                AiDecisionRecommendation(
+                    name = poi.displayName,
+                    amapSearchKeyword = poi.routeKeyword,
+                    imageUrl = null,
+                    distanceDescription = poi.distanceLabel,
+                    tag = cleanRecommendationTag(dto.tag) ?: poi.tag,
+                    intro = cleanPoiIntro(dto.intro)
+                ).also { recommendation ->
+                    Log.d(
+                        TAG,
+                        "ai source=poi_polish_success name=${recommendation.name} tag=${recommendation.tag}"
+                    )
+                }
+            }
+        }
+    }
+
+    suspend fun chooseDecisionPoiFromCandidates(
+        environment: DecisionEnvironmentSnapshot,
+        targetCategory: String,
+        candidates: List<DecisionPoiCandidate>,
+        recommendationTopic: RecommendationTopic? = null,
+        preferenceProfile: RecommendationPreferenceProfile? = null,
+        avoidNames: List<String> = emptyList()
+    ): Result<AiPoiChoice> {
+        val boundedCandidates = candidates.take(AI_CHOICE_CANDIDATE_LIMIT)
+        if (boundedCandidates.isEmpty()) {
+            return Result.failure(IllegalArgumentException("candidate list is empty"))
+        }
+
+        return withContext(Dispatchers.IO) {
+            runAiCatching {
+                val json = requestJsonContent(
+                    systemPrompt = buildPoiChoiceSystemPrompt(),
+                    prompt = buildPoiChoicePrompt(
+                        environment = environment,
+                        targetCategory = targetCategory,
+                        candidates = boundedCandidates,
+                        recommendationTopic = recommendationTopic,
+                        preferenceProfile = preferenceProfile,
+                        avoidNames = avoidNames
+                    ),
+                    maxCompletionTokens = 96,
+                    reasoningEffort = "low",
+                    overrideModel = decisionModel,
+                    temperature = if (targetCategory == "play") 0.45 else 0.28,
+                    presencePenalty = null
+                )
+                parsePoiChoice(json, boundedCandidates).also { choice ->
+                    val selectedName = boundedCandidates.getOrNull(choice.index)?.displayName.orEmpty()
+                    Log.d(
+                        TAG,
+                        "ai source=poi_choice_success index=${choice.index} name=$selectedName tag=${choice.tag} reason=${choice.reason.orEmpty().take(60)}"
                     )
                 }
             }
@@ -185,6 +303,159 @@ class AiRepository(
             "待解析文本：[$rawText]"
     }
 
+    private fun buildWishIntentSystemPrompt(): String {
+        return "You extract dating wish intents. Output strictly valid JSON: {\"title\":\"\",\"category\":\"meal|play\",\"location_keyword\":\"\"}"
+    }
+
+    private fun buildDecisionSystemPrompt(
+        targetCategory: String,
+        candidateBatch: Boolean
+    ): String {
+        val schema = if (candidateBatch) {
+            "{\"candidates\":[{\"display_name\":\"\",\"amap_search_keyword\":\"\",\"distance_desc\":\"\",\"tag\":\"\",\"intro\":\"\"}]}"
+        } else {
+            "{\"display_name\":\"\",\"amap_search_keyword\":\"\",\"distance_desc\":\"\",\"tag\":\"\",\"intro\":\"\"}"
+        }
+        return if (targetCategory == "play") {
+            "You are a local Wuhan explorer finding niche, real, non-touristy dating spots. Output strictly valid JSON: $schema"
+        } else {
+            "You are a local Wuhan food scout finding nearby real restaurants, cafes, desserts, and supper spots. Output strictly valid JSON: $schema"
+        }
+    }
+
+    private fun buildPoiPolishSystemPrompt(): String {
+        return "You write concise warm Chinese copy for a real AMap POI. Do not rename the place. Output strictly valid JSON: {\"tag\":\"\",\"intro\":\"\"}"
+    }
+
+    private fun buildPoiChoiceSystemPrompt(): String {
+        return "You are Jiaqi's personal date recommendation brain. You must choose from verified AMap POI candidates only. Never invent, rename, or output a place outside the list. Output strictly valid JSON: {\"index\":0,\"tag\":\"\",\"intro\":\"\",\"reason\":\"\"}"
+    }
+
+    private fun buildPoiChoicePrompt(
+        environment: DecisionEnvironmentSnapshot,
+        targetCategory: String,
+        candidates: List<DecisionPoiCandidate>,
+        recommendationTopic: RecommendationTopic?,
+        preferenceProfile: RecommendationPreferenceProfile?,
+        avoidNames: List<String>
+    ): String {
+        val categoryLabel = if (targetCategory == "meal") "meal" else "play"
+        val topicLine = recommendationTopic
+            ?.let { "Current exploration theme: ${it.label}. ${it.compactHint}" }
+            ?: "Current exploration theme: flexible."
+        val preferenceLine = preferenceProfile
+            ?.promptHint()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "Personal preference profile: $it" }
+            ?: "Personal preference profile: still learning, favor variety."
+        val avoidLine = avoidNames
+            .distinct()
+            .takeLast(12)
+            .takeIf { it.isNotEmpty() }
+            ?.joinToString(prefix = "Avoid repeating or imitating: ", separator = " | ")
+            ?: "Avoid repeating or imitating: none."
+        val studentCoupleProfile = buildStudentCoupleProfilePrompt()
+        val candidateLines = candidates.mapIndexed { index, poi ->
+            val openLabel = when (poi.isOpenNow) {
+                true -> "open_now"
+                false -> "maybe_closed"
+                null -> "opening_unknown"
+            }
+            "$index. name=${poi.displayName}; type=${poi.typeDescription.orEmpty()}; tag=${poi.tag.orEmpty()}; address=${poi.address.orEmpty()}; distance=${poi.distanceLabel}; opening=$openLabel ${poi.openingHours.orEmpty()}"
+        }.joinToString("\n")
+
+        return """
+Task: choose the single best real POI for a Wuhan university couple right now.
+$studentCoupleProfile
+Category: $categoryLabel
+Time: ${environment.currentTimeLabel}
+Weather: ${environment.weatherCondition}
+User location: ${environment.userLocationLabel} (${String.format(Locale.US, "%.4f", environment.latitude)}, ${String.format(Locale.US, "%.4f", environment.longitude)})
+$topicLine
+$preferenceLine
+$avoidLine
+
+Verified AMap candidates:
+$candidateLines
+
+Rules:
+- Pick one candidate by index only. The index must exist in the list.
+- The list is already roughly sorted by local quality from stronger to weaker. Only choose a lower-ranked candidate when it is clearly more personal, fresh, and date-worthy.
+- Do not output any new place name.
+- Prefer the candidate that best matches time, weather, distance, topic, and personal preference.
+- If two candidates are similar, pick the fresher and less recently repeated feeling one.
+- Public transport matters a lot. Prefer metro-accessible areas around WHU/HUBU, Jiedaokou, Guangbutun, Xudong, Shahu, Chuhehanjie, Optics Valley, and Wuchang MIXC. Avoid remote suburbs unless it is a genuinely classic long-trip scenic destination.
+- For meals, prefer student-premium: nearby, tasty, relaxed, concrete restaurants. Avoid stiff luxury traps.
+- For play, balance classic romance and surprise: photobooths, cinema/KTV, arcades, scenic walks, niche exhibitions, DIY workshops, pet cafes, pop-up markets, trendy interactive shops, small owner-run stores, or worthwhile scenic spots.
+- If candidate quality is close, prefer hidden gems around WHU/HUBU core circles over generic famous defaults.
+- tag: 2 to 4 Simplified Chinese characters.
+- intro: 8 to 18 Simplified Chinese characters. Describe this place itself. Do not mention AI, weather, time, location, route, "real/verified", or "date suitable".
+- reason: short internal reason in Chinese, <= 24 characters.
+Return JSON only.
+""".trimIndent()
+    }
+
+    private fun buildStudentCoupleProfilePrompt(): String {
+        return """
+User profile:
+{"identity":"University Student Couple (WHU & HUBU)","vibe":"fun, romantic, curious, surprise-loving","budget":"student-premium; relaxed trendy quality, not stiff luxury","mobility":"subway/bus/cycling; prefer WHU/HUBU, Jiedaokou, Guangbutun, Xudong, Shahu, Chuhehanjie, Optics Valley, Wuchang MIXC","likes":"photobooths, cinema, KTV, arcades, scenic walks, DIY, pet cafes, pop-ups, niche exhibitions, trendy small shops","avoid":"remote suburbs, low-value luxury traps, dull repetitive check-ins"}
+""".trimIndent()
+    }
+
+    private fun buildCompactCoupleProfileLine(): String {
+        return "Profile: WHU+HUBU student couple; metro/bus; student-premium; likes romantic, playful, surprising real places; meals nearby, play farther only if worth it."
+    }
+
+    private fun buildPoiPolishPrompt(
+        environment: DecisionEnvironmentSnapshot,
+        targetCategory: String,
+        poi: DecisionPoiCandidate,
+        recommendationTopic: RecommendationTopic?,
+        preferenceProfile: RecommendationPreferenceProfile?
+    ): String {
+        val categoryLabel = if (targetCategory == "meal") "餐饮" else "玩乐"
+        val preferenceHint = preferenceProfile?.promptHint()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "User taste: $it\n" }
+            .orEmpty()
+        val topicHint = recommendationTopic
+            ?.let { "Theme: ${it.label}. ${it.compactHint}\n" }
+            .orEmpty()
+        return """
+真实高德 POI 已确定，不能改名，不能虚构分店。
+地点名：${poi.displayName}
+类型：${poi.typeDescription.orEmpty()}
+地址：${poi.address.orEmpty()}
+距离：${poi.distanceLabel}
+当前：${environment.currentTimeLabel}，${environment.weatherCondition}
+类别：$categoryLabel
+$topicHint$preferenceHint
+请只为这个真实地点写一个短标签和一句简明介绍。
+要求：
+- tag <= 4 个中文字符。
+- intro 10 到 24 个中文字符，只写这个地点本身的特点。
+- 不要写“根据天气/时间/位置/AI推荐/适合约会”。
+- 不要输出地点名，不要输出 Markdown。
+返回 JSON：{"tag":"","intro":""}
+""".trimIndent()
+    }
+
+    private fun decisionTemperature(
+        targetCategory: String,
+        candidateBatch: Boolean
+    ): Double {
+        return when {
+            candidateBatch && targetCategory == "play" -> 0.85
+            candidateBatch -> 0.72
+            targetCategory == "play" -> 0.72
+            else -> 0.55
+        }
+    }
+
+    private fun decisionPresencePenalty(targetCategory: String): Double {
+        return if (targetCategory == "play") 0.6 else 0.35
+    }
+
     private fun buildDecisionPrompt(
         environment: DecisionEnvironmentSnapshot,
         targetCategory: String
@@ -201,7 +472,8 @@ class AiRepository(
             "结果必须是一个可以真正前往的具体地点，不要返回模糊区域。" +
             "你只能返回一个 JSON 对象，不要返回数组、解释文字或 Markdown。" +
             "必须字段包括：" +
-            "'name'(店名或地点名)、" +
+            "'display_name'(界面展示用的简短店名或地点名)、" +
+            "'amap_search_keyword'(给高德地图搜索用的核心品牌名 + 地段关键词，如 巴厘龙虾 江汉路)、" +
             "'image_url'(相关且有效的网络图片链接)、" +
             "'distance_desc'(距离描述，如 约 1.2km)、" +
             "'tag'(一个很短的标签，如 高分 / 安静 / 夜景)、" +
@@ -214,7 +486,8 @@ class AiRepository(
         strictTimeMatch: Boolean,
         avoidNames: List<String>,
         nearbyMallName: String?,
-        preferenceProfile: RecommendationPreferenceProfile?
+        preferenceProfile: RecommendationPreferenceProfile?,
+        recommendationTopic: RecommendationTopic?
     ): String {
         val categoryLabel = if (targetCategory == "meal") "meal" else "play"
         val retryGuard = if (strictTimeMatch) {
@@ -241,6 +514,7 @@ Exploration mode:
 - A mall answer must be a concrete named store, floor/zone, cinema, arcade, exhibition, bookstore, dessert/cafe, or shop cluster, not just a vague mall district.
 """.trimIndent()
         val personalizationSection = buildPersonalizationSection(preferenceProfile)
+        val topicSection = buildTopicSection(recommendationTopic, targetCategory)
         return """
 Wuhan couple date picker.
 Time: ${environment.currentTimeLabel} Asia/Shanghai.
@@ -251,6 +525,7 @@ Need: one real specific $categoryLabel place they can go to right now.
 $retryGuard
 $avoidSection
 $personalizationSection
+$topicSection
 $explorationSection
 
 Weather fit:
@@ -263,7 +538,7 @@ Rules:
 - meal => restaurant / cafe / dessert / hotpot / bbq / bar / supper spot only.
 - meal => never park / bookstore / riverside / scenic area / vague district.
 - meal => must be close to the given coordinates; prefer within 1.5 km, absolute max 2.5 km. Never recommend a far branch or distant business district.
-- meal => if a brand has multiple branches, pick the nearest branch around the coordinates and put the branch name in "name".
+- meal => if a brand has multiple branches, pick the nearest branch around the coordinates; keep "display_name" clean and put brand + area/branch hints in "amap_search_keyword".
 - meal => vary cuisine and mood; avoid repeating the same chain, mall, food street, or branch style from recent picks.
 - play => mix scenic/cultural/fun/lifestyle places: attractions, parks, riverside, viewpoints, historic streets, museums, galleries, exhibitions, creative blocks, bookstores, cinema, livehouse, arcade, escape room, bowling, pool hall, climbing gym, pottery/handcraft studio, night market, photogenic landmark, mall-based fun shops, toy/blind-box shops, record stores, vintage shops, buyer shops, lifestyle stores, dessert/cafe stops, and owner-run small shops.
 - play => never vague mall district or generic food street; if choosing a mall/shop, name the concrete store or exact mini destination.
@@ -275,7 +550,7 @@ Rules:
 - no vague areas, no explanations, no markdown.
 
 Return only one JSON object:
-{"name":"","image_url":"","distance_desc":"","tag":"","intro":""}
+{"display_name":"","amap_search_keyword":"","image_url":"","distance_desc":"","tag":"","intro":""}
 Use short natural Chinese for "tag" and "intro". "intro" only describes the place itself.
 """.trimIndent()
     }
@@ -286,7 +561,8 @@ Use short natural Chinese for "tag" and "intro". "intro" only describes the plac
         strictTimeMatch: Boolean,
         avoidNames: List<String>,
         nearbyMallName: String?,
-        preferenceProfile: RecommendationPreferenceProfile?
+        preferenceProfile: RecommendationPreferenceProfile?,
+        recommendationTopic: RecommendationTopic?
     ): String {
         val categoryLabel = if (targetCategory == "meal") "meal" else "play"
         val strictLine = if (strictTimeMatch) {
@@ -296,22 +572,23 @@ Use short natural Chinese for "tag" and "intro". "intro" only describes the plac
         }
         val avoidLine = avoidNames
             .distinct()
-            .takeLast(18)
+            .takeLast(6)
             .joinToString(" | ")
             .ifBlank { "none" }
-        val personalizationLine = buildCompactPersonalizationLine(preferenceProfile)
+        val personalizationLine = buildUltraCompactPersonalizationLine(preferenceProfile)
+        val topicLine = buildUltraCompactTopicLine(recommendationTopic, targetCategory)
         return """
-Return JSON only: {"name":"","image_url":"","distance_desc":"","tag":"","intro":""}
-You are a Wuhan date-place picker. Values must be natural Chinese.
-Context: time=${environment.currentTimeLabel} Asia/Shanghai; weather=${environment.weatherCondition}; area=${environment.userLocationLabel}; coords=${String.format(Locale.US, "%.4f", environment.latitude)},${String.format(Locale.US, "%.4f", environment.longitude)}.
-Need: one real specific $categoryLabel place usable right now.
+Return JSON only: {"display_name":"","amap_search_keyword":"","image_url":"","distance_desc":"","tag":"","intro":""}
+You are Jiaqi, a Wuhan date-place picker. Recommend one real specific $categoryLabel place.
+${buildCompactCoupleProfileLine()}
+Now: ${environment.currentTimeLabel}; weather=${environment.weatherCondition}; area=${environment.userLocationLabel}; ll=${String.format(Locale.US, "%.3f", environment.latitude)},${String.format(Locale.US, "%.3f", environment.longitude)}.
 $strictLine
-Avoid recent/disliked: $avoidLine.
+Avoid exact repeats only: $avoidLine.
 $personalizationLine
-Never choose the same place, same branch, or renamed alias from the avoid list.
-Time rule: ${buildCompactTimeRule(environment.currentTime.hour, targetCategory)}
-Weather rule: ${buildCompactWeatherRule(environment.weatherCondition, targetCategory)}
-Rules: do not overfit to nearby malls, but concrete mall shops are allowed. meal=nearby restaurant/cafe/dessert/hotpot/bbq/bar/supper only, prefer <=1.5km and max 2.5km; never park/scenic/vague district. play=concrete fun/scenic/cultural/lifestyle place; vary across attractions, parks, riverside/lakeside, museums, galleries, exhibitions, old streets, creative blocks, markets, landmarks, theaters, livehouses, studios, arcades, small theaters, bookstores, toy/blind-box shops, record/vintage stores, buyer shops, lifestyle stores, dessert/cafe stops, and owner-run small shops. If mall/shop, name the specific store/spot, not a vague mall. No markdown, no explanation. intro<=28 Chinese chars and only describes the place itself.
+$topicLine
+Time: ${buildUltraCompactTimeRule(environment.currentTime.hour, targetCategory)}
+Rules: use an official real AMap-searchable POI name you are confident exists. Never invent generic names like "银饰DIY·湖大店", "手作坊·街道口店", "某某体验馆", "后侧小花园", "后街樱花林". display_name=clean UI name; amap_search_keyword=POI+area. meal=nearby concrete food/drink<=2.5km, no vague district. play=concrete date-worthy non-meal spot: DIY/studio/arcade/pet cafe/photo booth/gallery/lifestyle/vintage/toy/record shop/indie cafe, or one worthwhile scenic/cultural spot. Avoid 昙华林/省博/东湖/万林/ordinary bookstore. If unsure about a niche shop, choose a real known exact POI instead. If mall, exact shop. intro<=14 Chinese chars.
+Location rule: choose near the current coordinates first. Ordinary shops/cafes/arcades/studios should be nearby; only scenic parks, landmarks, riverside/lakeside places, museums/galleries, theaters, or truly special interactive experiences may be farther.
 """.trimIndent()
     }
 
@@ -319,23 +596,26 @@ Rules: do not overfit to nearby malls, but concrete mall shops are allowed. meal
         environment: DecisionEnvironmentSnapshot,
         targetCategory: String,
         avoidNames: List<String>,
-        preferenceProfile: RecommendationPreferenceProfile?
+        preferenceProfile: RecommendationPreferenceProfile?,
+        recommendationTopic: RecommendationTopic?
     ): String {
         val categoryLabel = if (targetCategory == "meal") "meal" else "play"
         val avoidLine = avoidNames
             .distinct()
-            .takeLast(12)
+            .takeLast(4)
             .joinToString(" | ")
             .ifBlank { "none" }
         val personalizationLine = buildUltraCompactPersonalizationLine(preferenceProfile)
+        val topicLine = buildUltraCompactTopicLine(recommendationTopic, targetCategory)
 
         return """
-JSON only: {"name":"","distance_desc":"","tag":"","intro":""}
+JSON only: {"display_name":"","amap_search_keyword":"","distance_desc":"","tag":"","intro":""}
 Wuhan $categoryLabel now. t=${environment.currentTime.hour} w=${environment.weatherCondition} ll=${String.format(Locale.US, "%.3f", environment.latitude)},${String.format(Locale.US, "%.3f", environment.longitude)}
-Avoid: $avoidLine
+        Do not return these invalid/recent names or aliases: $avoidLine
 $personalizationLine
+$topicLine
 Time: ${buildUltraCompactTimeRule(environment.currentTime.hour, targetCategory)}
-meal=nearby food/drink<=2.5km. play=prefer named shop/lifestyle/interactive/cafe/bookstore/arcade/studio over famous scenic repeats; no vague district. intro<=10 Chinese chars.
+        display_name=clean UI name. amap_search_keyword=core name+area for AMap. meal=nearby food/drink<=2.5km. play=nearby hidden-gem non-food leisure; prefer DIY/pottery/tufting/baking/retro arcade/lifestyle/vintage/record/toy/craft/small gallery before parks/riverside/scenic walks unless outdoor is clearly the best fit; only scenic parks/landmarks/museums/galleries/theaters or truly special interactive places may be farther; never 昙华林/博物馆/东湖/万林/ordinary bookstore; no breakfast/noodle/hotpot/bbq/restaurant-only; intro<=10 Chinese chars.
 """.trimIndent()
     }
 
@@ -347,7 +627,7 @@ meal=nearby food/drink<=2.5km. play=prefer named shop/lifestyle/interactive/cafe
                 "morning open only; no sunset/bar/nightlife."
             }
             in 11..15 -> "open at midday; no sunset/nightlife."
-            in 16..19 -> "open now; dusk/dinner/cafe/outdoor ok."
+            in 16..19 -> "open now; avoid day-only museums/temples/exhibitions if likely closed after 16:30."
             in 20..23 -> if (targetCategory == "meal") {
                 "night open food/bar/supper only; no breakfast/day-only."
             } else {
@@ -363,7 +643,8 @@ meal=nearby food/drink<=2.5km. play=prefer named shop/lifestyle/interactive/cafe
         strictTimeMatch: Boolean,
         avoidNames: List<String>,
         nearbyMallName: String?,
-        preferenceProfile: RecommendationPreferenceProfile?
+        preferenceProfile: RecommendationPreferenceProfile?,
+        recommendationTopic: RecommendationTopic?
     ): String {
         val categoryLabel = if (targetCategory == "meal") "meal" else "play"
         val retryGuard = if (strictTimeMatch) {
@@ -374,10 +655,10 @@ meal=nearby food/drink<=2.5km. play=prefer named shop/lifestyle/interactive/cafe
         val avoidSection = if (avoidNames.isNotEmpty()) {
             avoidNames
                 .distinct()
-                .takeLast(28)
+                .takeLast(12)
                 .joinToString(
                     separator = "\n",
-                    prefix = "Avoid these recent/disliked places, same branches, aliases, and close variants:\n"
+                    prefix = "Avoid exact recent/disliked place repeats only; do not ban whole place types:\n"
                 ) { "- $it" }
         } else {
             "Avoid recent/disliked places: none."
@@ -387,12 +668,14 @@ meal=nearby food/drink<=2.5km. play=prefer named shop/lifestyle/interactive/cafe
             ?.let { "Nearby mall signal exists ($it). You may use a concrete interesting shop/arcade/cinema/bookstore/cafe inside it, but avoid vague mall-only answers." }
             ?: "No mall preference. Malls and shops are allowed only as concrete named mini-destinations."
         val personalizationSection = buildPersonalizationSection(preferenceProfile)
+        val topicSection = buildTopicSection(recommendationTopic, targetCategory)
 
         return """
 Return JSON only:
-{"candidates":[{"name":"","image_url":"","distance_desc":"","tag":"","intro":""}]}
+{"candidates":[{"display_name":"","amap_search_keyword":"","image_url":"","distance_desc":"","tag":"","intro":""}]}
 
 Wuhan couple date picker. Give 4 diverse real specific $categoryLabel places usable right now.
+${buildCompactCoupleProfileLine()}
 Time: ${environment.currentTimeLabel} Asia/Shanghai.
 Weather: ${environment.weatherCondition}.
 Start area: ${environment.userLocationLabel} (${String.format(Locale.US, "%.4f", environment.latitude)}, ${String.format(Locale.US, "%.4f", environment.longitude)}).
@@ -400,16 +683,19 @@ $retryGuard
 $avoidSection
 $mallLine
 $personalizationSection
+$topicSection
 
 Time rule: ${buildCompactTimeRule(environment.currentTime.hour, targetCategory)}
 Weather rule: ${buildCompactWeatherRule(environment.weatherCondition, targetCategory)}
 
 Rules:
 - Candidates must be meaningfully different place types or neighborhoods.
+- Each candidate needs display_name for UI and amap_search_keyword for AMap search. amap_search_keyword should be the core brand/POI + area/branch hint, not a sentence.
 - meal => real nearby restaurant/cafe/dessert/hotpot/bbq/bar/supper only; prefer <=1.5km and max 2.5km; include nearest branch name when relevant.
 - meal => no park, scenic area, vague district, broad food street, or far famous branch.
-- play => mix scenic/cultural/fun/lifestyle places: attractions, parks, riverside/lakeside, museums, galleries, exhibitions, old streets, creative blocks, bookstores, theaters, livehouses, studios, markets, viewpoints, arcades, escape rooms, bowling, pool halls, craft studios, toy/blind-box shops, record/vintage stores, buyer shops, lifestyle stores, dessert/cafe stops, and owner-run small shops.
-- play => include more playful and varied options; do not repeat the same obvious top places or the same mall/shop style.
+- play => first look near the current coordinates for specific micro-destinations: DIY workshops, pottery, tufting, baking studios, retro arcades, lifestyle boutiques, vintage/record/toy shops, small galleries, craft studios, owner-run small shops, and indie cafes with a special experience.
+- play => ordinary shops, cafes, mall stores, arcades, and studios should be nearby; only scenic parks/landmarks/riverside/lakeside places, museums/galleries/theaters, or a truly special interactive experience may be farther.
+- play => do not choose famous tourist defaults or ordinary bookstores: 昙华林, 湖北省博物馆, 东湖, 武汉大学万林艺术博物馆, 西西弗书店, 卓尔书店.
 - For play candidate batches, at least 2 of 4 should be lifestyle/interactive/micro-destination options such as a named shop, bookstore, arcade, craft studio, dessert/cafe stop, record/vintage store, buyer shop, or mall mini-destination. At most 1 should be a classic park/museum/scenic landmark.
 - Bad weather => choose indoor or sheltered cultural/fun/lifestyle places rather than open-air scenery.
 - Comfortable weather => outdoor scenic/cultural places are welcome.
@@ -424,7 +710,8 @@ Rules:
         strictTimeMatch: Boolean,
         avoidNames: List<String>,
         nearbyMallName: String?,
-        preferenceProfile: RecommendationPreferenceProfile?
+        preferenceProfile: RecommendationPreferenceProfile?,
+        recommendationTopic: RecommendationTopic?
     ): String {
         val categoryLabel = if (targetCategory == "meal") "meal" else "play"
         val strictLine = if (strictTimeMatch) {
@@ -434,7 +721,7 @@ Rules:
         }
         val avoidLine = avoidNames
             .distinct()
-            .takeLast(22)
+            .takeLast(8)
             .joinToString(" | ")
             .ifBlank { "none" }
         val mallLine = if (nearbyMallName.isNullOrBlank()) {
@@ -443,19 +730,22 @@ Rules:
             "Nearby mall=$nearbyMallName; concrete interesting shops inside it are allowed, but avoid mall overfitting."
         }
         val personalizationLine = buildCompactPersonalizationLine(preferenceProfile)
+        val topicLine = buildCompactTopicLine(recommendationTopic, targetCategory)
 
         return """
-Return JSON only: {"candidates":[{"name":"","image_url":"","distance_desc":"","tag":"","intro":""}]}
-Give 4 diverse real Wuhan $categoryLabel places usable right now.
+Return JSON only: {"candidates":[{"display_name":"","amap_search_keyword":"","image_url":"","distance_desc":"","tag":"","intro":""}]}
+Give 2 diverse real Wuhan $categoryLabel places usable right now.
+${buildCompactCoupleProfileLine()}
 Context: time=${environment.currentTimeLabel} Asia/Shanghai; weather=${environment.weatherCondition}; area=${environment.userLocationLabel}; coords=${String.format(Locale.US, "%.4f", environment.latitude)},${String.format(Locale.US, "%.4f", environment.longitude)}.
 $strictLine
-Avoid same/alias/recent/disliked: $avoidLine.
+Avoid exact recent/disliked repeats: $avoidLine.
 $mallLine
 $personalizationLine
+$topicLine
 Time rule: ${buildCompactTimeRule(environment.currentTime.hour, targetCategory)}
 Weather rule: ${buildCompactWeatherRule(environment.weatherCondition, targetCategory)}
-Rules: meal=nearby concrete food/drink only, prefer <=1.5km and max 2.5km, nearest branch. play=concrete fun/scenic/cultural/lifestyle place; vary across attractions, parks, riverside/lakeside, museums, galleries, exhibitions, old streets, creative blocks, landmarks, theaters, livehouses, studios, arcades, escape rooms, bookstores, toy/blind-box shops, record/vintage stores, buyer shops, dessert/cafe stops, and owner-run small shops. If mall/shop, name the specific spot. Bad weather => indoor/sheltered. intro<=24 Chinese chars. No markdown, no explanation.
-For play batches: include at least 2 shop/lifestyle/interactive micro-destinations, and at most 1 classic park/museum/scenic landmark.
+Rules: display_name=clean UI name. amap_search_keyword=core POI/brand + area/branch for AMap. meal=nearby concrete food/drink, prefer <=1.5km and max 2.5km. play=nearby concrete date-worthy non-meal spot: DIY/studio/arcade/pet cafe/photo booth/gallery/lifestyle/vintage/toy/record shop/indie cafe with experience, or one worthwhile scenic/cultural spot. Ordinary shops/cafes/arcades/studios should be near; only scenic parks/landmarks/museums/galleries/theaters or truly special interactive places may be farther. Never choose 昙华林/湖北省博物馆/东湖/万林/ordinary bookstores. If inside mall, name the exact shop. intro<=18 Chinese chars. No markdown, no explanation.
+For play batches: at least 1 should be shop/lifestyle/interactive, not both scenic walks.
 """.trimIndent()
     }
 
@@ -463,22 +753,25 @@ For play batches: include at least 2 shop/lifestyle/interactive micro-destinatio
         environment: DecisionEnvironmentSnapshot,
         targetCategory: String,
         avoidNames: List<String>,
-        preferenceProfile: RecommendationPreferenceProfile?
+        preferenceProfile: RecommendationPreferenceProfile?,
+        recommendationTopic: RecommendationTopic?
     ): String {
         val categoryLabel = if (targetCategory == "meal") "meal" else "play"
         val avoidLine = avoidNames
             .distinct()
-            .takeLast(14)
+            .takeLast(8)
             .joinToString(" | ")
             .ifBlank { "none" }
         val personalizationLine = buildUltraCompactPersonalizationLine(preferenceProfile)
+        val topicLine = buildUltraCompactTopicLine(recommendationTopic, targetCategory)
 
         return """
-JSON only: {"candidates":[{"name":"","distance_desc":"","tag":"","intro":""}]}
+JSON only: {"candidates":[{"display_name":"","amap_search_keyword":"","distance_desc":"","tag":"","intro":""}]}
 4 diverse Wuhan $categoryLabel places. t=${environment.currentTime.hour}:00 w=${environment.weatherCondition} ll=${String.format(Locale.US, "%.3f", environment.latitude)},${String.format(Locale.US, "%.3f", environment.longitude)}
-Avoid: $avoidLine
+No exact repeat: $avoidLine
 $personalizationLine
-meal=nearby food/drink<=2.5km, different cuisines. play=varied real places; include >=2 named shops/lifestyle/interactive/cafe/bookstore/arcade/studio options and <=1 classic park/museum/scenic spot. No vague mall/district/nearby area. intro<=12 Chinese chars.
+$topicLine
+display_name=clean UI name; amap_search_keyword=POI+area. meal=nearby food/drink<=2.5km, different cuisines. play=nearby hidden-gem non-food real places; include >=2 DIY/lifestyle/interactive/arcade/studio/vintage/record/toy/small-gallery options. Only scenic parks/landmarks/museums/galleries/theaters or truly special interactive places may be farther. Never 昙华林/博物馆/东湖/万林/ordinary bookstore. No breakfast/noodle/hotpot/bbq/restaurant-only. No vague mall/district. intro<=12 Chinese chars.
 """.trimIndent()
     }
 
@@ -497,6 +790,47 @@ Use this as a soft preference, not a hard rule. Still obey time, weather, distan
 """.trimIndent()
     }
 
+    private fun buildTopicSection(
+        recommendationTopic: RecommendationTopic?,
+        targetCategory: String
+    ): String {
+        val topic = recommendationTopic ?: return "Android topic focus: balanced discovery."
+        val categoryRule = if (targetCategory == "meal") {
+            "Stay in this food vertical; pick a concrete nearby restaurant/cafe/stall, not a broad street or mall."
+        } else {
+            "Stay in this play vertical; pick a concrete real destination, not a broad district or generic tourist default."
+        }
+        return """
+Android-selected topic focus:
+- Topic: ${topic.label}
+- Probability reason: Android weighted this topic using local preference, time, weather, and recent cooldown.
+- Must search inside this topic only: ${topic.promptHint}
+- $categoryRule
+""".trimIndent()
+    }
+
+    private fun buildCompactTopicLine(
+        recommendationTopic: RecommendationTopic?,
+        targetCategory: String
+    ): String {
+        val topic = recommendationTopic ?: return "Topic focus: balanced."
+        val categoryRule = if (targetCategory == "meal") {
+            "stay food-only"
+        } else {
+            "stay non-food play-only"
+        }
+        return "Topic focus: 【${topic.label}】, $categoryRule, ${topic.compactHint.take(150)}"
+    }
+
+    private fun buildUltraCompactTopicLine(
+        recommendationTopic: RecommendationTopic?,
+        targetCategory: String
+    ): String {
+        val topic = recommendationTopic ?: return "Topic: balanced."
+        val categoryRule = if (targetCategory == "meal") "food-only" else "play-only"
+        return "Topic: 【${topic.label}】 $categoryRule. ${topic.compactHint.take(60)}"
+    }
+
     private fun buildCompactPersonalizationLine(
         preferenceProfile: RecommendationPreferenceProfile?
     ): String {
@@ -513,7 +847,7 @@ Use this as a soft preference, not a hard rule. Still obey time, weather, distan
         val hint = preferenceProfile
             ?.promptHint()
             ?.takeIf { it.isNotBlank() }
-            ?.take(160)
+            ?.take(80)
             ?: return "Pref: none."
         return "Pref: $hint"
     }
@@ -701,157 +1035,33 @@ $categoryHint
         val isComfortableOutdoor: Boolean
     )
 
+    private data class AiPoiPolishDto(
+        val tag: String? = null,
+        val intro: String? = null
+    )
+
     private suspend fun requestJsonContent(
+        systemPrompt: String? = null,
         prompt: String,
         maxCompletionTokens: Int,
         reasoningEffort: String,
-        overrideModel: String = model
+        overrideModel: String = model,
+        temperature: Double = 0.08,
+        presencePenalty: Double? = null,
+        preferJsonResponseFormat: Boolean = true
     ): String {
-        val startedAtMillis = System.currentTimeMillis()
-        Log.d(
-            TAG,
-            "ai source=http_start model=$overrideModel promptLength=${prompt.length} maxTokens=$maxCompletionTokens"
-        )
-        val response = apiService.createChatCompletion(
-            ChatRequest(
-                model = overrideModel,
-                messages = listOf(
-                    ChatMessage(
-                        role = "user",
-                        content = prompt
-                    )
-                ),
+        return chatClient.requestJsonContent(
+            AiChatRequest(
+                systemPrompt = systemPrompt,
+                prompt = prompt,
                 maxCompletionTokens = maxCompletionTokens,
-                reasoningEffort = reasoningEffort
+                reasoningEffort = reasoningEffort,
+                model = overrideModel,
+                temperature = temperature,
+                presencePenalty = presencePenalty,
+                preferJsonResponseFormat = preferJsonResponseFormat
             )
         )
-
-        val rawBody = if (response.isSuccessful) {
-            response.body()?.string()
-        } else {
-            val errorBody = response.errorBody()?.string().orEmpty()
-            error("AI HTTP ${response.code()}: ${errorBody.take(AI_ERROR_BODY_LOG_LIMIT)}")
-        }
-            ?.takeIf { it.isNotBlank() }
-            ?: error("AI response body is empty")
-
-        Log.d(
-            TAG,
-            "ai source=http_body elapsed=${System.currentTimeMillis() - startedAtMillis}ms rawLength=${rawBody.length}"
-        )
-
-        val content = extractChatMessageContent(rawBody)
-            ?.takeIf { it.isNotBlank() }
-            ?: error("AI response did not contain message content: ${rawBody.take(AI_ERROR_BODY_LOG_LIMIT)}")
-
-        Log.d(
-            TAG,
-            "ai source=http_success elapsed=${System.currentTimeMillis() - startedAtMillis}ms contentLength=${content.length}"
-        )
-
-        return extractJsonObject(content)
-    }
-
-    private fun extractChatMessageContent(rawBody: String): String? {
-        val root = JsonParser.parseString(rawBody).asJsonObject
-        val choices = root.getAsJsonArray("choices") ?: return null
-        val firstChoice = choices.firstOrNull()?.asJsonObject ?: return null
-
-        firstChoice.getAsJsonObjectOrNull("message")
-            ?.getStringOrNull("content")
-            ?.let { return it }
-
-        firstChoice.getStringOrNull("text")?.let { return it }
-
-        firstChoice.getAsJsonObjectOrNull("delta")
-            ?.getStringOrNull("content")
-            ?.let { return it }
-
-        return null
-    }
-
-    private fun JsonObject.getAsJsonObjectOrNull(memberName: String): JsonObject? {
-        val element = get(memberName) ?: return null
-        return if (element.isJsonObject) element.asJsonObject else null
-    }
-
-    private fun JsonObject.getStringOrNull(memberName: String): String? {
-        val element = get(memberName) ?: return null
-        return when {
-            element.isJsonPrimitive -> element.asString
-            element.isJsonObject || element.isJsonArray -> element.toString()
-            else -> null
-        }
-    }
-
-    private fun extractJsonObject(rawContent: String): String {
-        val trimmedContent = rawContent.trim()
-        val fencedBlocks = Regex(
-            pattern = "```(?:json)?\\s*([\\s\\S]*?)\\s*```",
-            option = RegexOption.IGNORE_CASE
-        ).findAll(trimmedContent)
-            .mapNotNull { it.groupValues.getOrNull(1)?.trim() }
-            .toList()
-
-        val candidates = buildList {
-            add(trimmedContent)
-            addAll(fencedBlocks)
-        }
-
-        return candidates.firstNotNullOfOrNull(::findBalancedJsonValue) ?: error(
-            "AI response did not contain a JSON object or array"
-        )
-    }
-
-    private fun findBalancedJsonValue(content: String): String? {
-        var valueStart = -1
-        var openingChar = ' '
-        var closingChar = ' '
-        var depth = 0
-        var inString = false
-        var isEscaped = false
-
-        for (index in content.indices) {
-            val currentChar = content[index]
-
-            if (valueStart == -1) {
-                if (currentChar == '{' || currentChar == '[') {
-                    valueStart = index
-                    openingChar = currentChar
-                    closingChar = if (currentChar == '{') '}' else ']'
-                    depth = 1
-                    inString = false
-                    isEscaped = false
-                }
-                continue
-            }
-
-            if (isEscaped) {
-                isEscaped = false
-                continue
-            }
-
-            when (currentChar) {
-                '\\' -> if (inString) {
-                    isEscaped = true
-                }
-
-                '"' -> inString = !inString
-
-                openingChar -> if (!inString) {
-                    depth += 1
-                }
-
-                closingChar -> if (!inString) {
-                    depth -= 1
-                    if (depth == 0) {
-                        return content.substring(valueStart, index + 1)
-                    }
-                }
-            }
-        }
-
-        return null
     }
 
     private fun ParsedWishDto.toParsedWish(): ParsedWish {
@@ -870,6 +1080,40 @@ $categoryHint
             title = parsedTitle,
             category = parsedCategory,
             locationKeyword = locationKeyword?.trim()?.takeIf { it.isNotEmpty() }
+        )
+    }
+
+    private fun parsePoiChoice(
+        json: String,
+        candidates: List<DecisionPoiCandidate>
+    ): AiPoiChoice {
+        val root = JsonParser.parseString(json).asJsonObject
+        val rawIndex = listOf("index", "candidate_index", "choice", "selected_index")
+            .firstNotNullOfOrNull { memberName ->
+                root.get(memberName)?.let { element ->
+                    when {
+                        element.isJsonPrimitive && element.asJsonPrimitive.isNumber -> element.asInt
+                        element.isJsonPrimitive -> element.asString.toIntOrNull()
+                        else -> null
+                    }
+                }
+            }
+            ?: error("AI POI choice JSON did not contain index")
+
+        val normalizedIndex = when {
+            rawIndex in candidates.indices -> rawIndex
+            rawIndex - 1 in candidates.indices -> rawIndex - 1
+            else -> error("AI POI choice index out of range: $rawIndex")
+        }
+
+        return AiPoiChoice(
+            index = normalizedIndex,
+            tag = cleanRecommendationTag(root.getStringOrNull("tag")),
+            intro = cleanPoiIntro(root.getStringOrNull("intro")),
+            reason = root.getStringOrNull("reason")
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.take(40)
         )
     }
 
@@ -915,18 +1159,67 @@ $categoryHint
     }
 
     private fun AiDecisionRecommendationDto.toRecommendation(): AiDecisionRecommendation {
-        val parsedName = name?.trim().orEmpty()
+        val parsedName = displayName?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: name?.trim().orEmpty()
         require(parsedName.isNotEmpty()) {
-            "AI decision recommendation name is empty"
+            "AI decision recommendation display_name is empty"
         }
+        val parsedSearchKeyword = amapSearchKeyword
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: name?.trim()?.takeIf { it.isNotEmpty() && it != parsedName }
 
         return AiDecisionRecommendation(
             name = parsedName,
+            amapSearchKeyword = parsedSearchKeyword,
             imageUrl = imageUrl?.trim()?.takeIf { it.isNotEmpty() },
             distanceDescription = cleanDistanceDescription(distanceDescription),
             tag = cleanRecommendationTag(tag),
             intro = intro?.trim()?.takeIf { it.isNotEmpty() }
         )
+    }
+
+    private fun cleanPoiIntro(rawIntro: String?): String? {
+        val text = rawIntro
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return null
+
+        val bannedGenericSignals = listOf(
+            "真实可达",
+            "适合约会",
+            "适合现在",
+            "AI",
+            "ai",
+            "根据天气",
+            "根据时间",
+            "根据位置",
+            "天气",
+            "位置",
+            "路线",
+            "推荐",
+            "轻松逛一会"
+        )
+        if (bannedGenericSignals.any(text::contains) && text.length <= 18) {
+            return null
+        }
+
+        val cleaned = text
+            .replace("真实可达，", "")
+            .replace("真实可达", "")
+            .replace("适合约会", "")
+            .replace("适合现在", "")
+            .replace("AI推荐", "")
+            .replace("根据天气", "")
+            .replace("根据时间", "")
+            .replace("根据位置", "")
+            .replace("轻松逛一会", "")
+            .trim(' ', '，', '。', '.', ',', ';', '；')
+
+        return cleaned
+            .take(42)
+            .takeIf { it.isNotBlank() }
     }
 
     private fun cleanDistanceDescription(rawDistanceDescription: String?): String? {
@@ -1014,6 +1307,9 @@ $categoryHint
 
     private companion object {
         private const val TAG = "AiRepository"
+        private const val JSON_RESPONSE_FORMAT_TYPE = "json_object"
+        private const val DISABLED_THINKING_TYPE = "disabled"
         private const val AI_ERROR_BODY_LOG_LIMIT = 400
+        private const val AI_CHOICE_CANDIDATE_LIMIT = 8
     }
 }

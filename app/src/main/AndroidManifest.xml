@@ -18,6 +18,9 @@
         <meta-data
             android:name="com.amap.api.v2.apikey"
             android:value="${AMAP_API_KEY}" />
+        <service
+            android:name="com.amap.api.location.APSService"
+            android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true">

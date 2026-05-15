@@ -42,7 +42,7 @@ android {
         buildConfigField(
             "String",
             "AI_BASE_URL",
-            readLocalProperty("ai.baseUrl", "https://www.xyxyapi.com/").asBuildConfigField()
+            readLocalProperty("ai.baseUrl", "https://api.deepseek.com/").asBuildConfigField()
         )
         buildConfigField(
             "String",
@@ -52,12 +52,12 @@ android {
         buildConfigField(
             "String",
             "AI_MODEL",
-            readLocalProperty("ai.model", "gpt-5.4-mini").asBuildConfigField()
+            readLocalProperty("ai.model", "deepseek-v4-flash").asBuildConfigField()
         )
         buildConfigField(
             "String",
             "AI_DECISION_MODEL",
-            readLocalProperty("ai.decisionModel", "gpt-5.4-mini").asBuildConfigField()
+            readLocalProperty("ai.decisionModel", "deepseek-v4-flash").asBuildConfigField()
         )
         buildConfigField(
             "String",

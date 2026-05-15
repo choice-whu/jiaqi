@@ -51,7 +51,7 @@ object LocationHelper {
                             isNeedAddress = needAddress
                             isOnceLocation = true
                             isOnceLocationLatest = true
-                            isMockEnable = false
+                            isMockEnable = BuildConfig.DEBUG
                             httpTimeOut = timeoutMillis
                             setGpsFirst(preferGps)
                             setGpsFirstTimeout(minOf(timeoutMillis, GPS_FIRST_TIMEOUT_MS))

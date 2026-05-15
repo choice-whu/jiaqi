@@ -71,7 +71,7 @@ data class RecommendationPreferenceProfile(
                 append(". ")
             }
             if (disliked.isNotBlank()) {
-                append("Avoids ")
+                append("Choose less often ")
                 append(disliked)
                 append(".")
             }
@@ -99,6 +99,7 @@ object RecommendationTraitAnalyzer {
             addIf("bbq", "烧烤", "烤肉", "烤串", "烤鱼")
             addIf("coffee", "咖啡", "coffee", "m stand", "星巴克")
             addIf("dessert", "甜品", "蛋糕", "面包", "烘焙", "冰淇淋", "奶茶", "茶饮")
+            addIf("student_chain", "老乡鸡", "尊宝", "尊宝比萨", "袁记", "袁记云饺", "塔斯汀", "乡村基")
             addIf("noodle", "面", "粉", "拉面", "热干面", "蔡林记")
             addIf("western", "西餐", "牛排", "披萨", "意面", "brunch", "汉堡")
             addIf("japanese", "日料", "寿司", "拉面", "居酒屋", "一风堂")
@@ -108,9 +109,11 @@ object RecommendationTraitAnalyzer {
         } else {
             addIf("bookstore", "书店", "书城", "书屋", "西西弗", "卓尔", "德芭")
             addIf("cafe", "咖啡", "coffee", "m stand", "甜品", "奶茶", "茶饮", "下午茶")
-            addIf("arcade", "电玩", "游戏厅", "汤姆熊", "arcade", "密室", "桌游", "保龄球", "台球")
-            addIf("craft", "手作", "陶艺", "工坊", "香薰", "diy", "创意工坊")
-            addIf("small_shop", "小店", "买手", "主理人", "杂货", "生活方式", "潮玩", "盲盒", "玩具", "唱片", "黑胶", "中古")
+            addIf("pet_cafe", "猫咖", "狗咖", "宠物咖", "萌宠", "柯基", "柴犬", "异宠", "兔兔", "荷兰猪")
+            addIf("arcade", "电玩", "游戏厅", "汤姆熊", "arcade", "密室", "桌游", "保龄球", "台球", "vr")
+            addIf("craft", "手作", "陶艺", "工坊", "香薰", "diy", "创意工坊", "tufting", "银饰")
+            addIf("photo_studio", "写真", "自拍", "大头贴", "拍立得", "胶片", "照相馆", "摄影馆")
+            addIf("small_shop", "小店", "买手", "主理人", "生活方式", "潮玩", "盲盒", "玩具", "唱片", "黑胶", "中古", "文创")
             addIf("mall", "商场", "购物中心", "广场", "mall", "恒隆", "群光", "万象城", "武商", "武汉天地")
             addIf("museum", "博物馆", "博物院", "纪念馆")
             addIf("gallery", "美术馆", "艺术中心", "画廊", "展览", "艺术馆")
@@ -119,6 +122,18 @@ object RecommendationTraitAnalyzer {
             addIf("historic", "寺", "黄鹤楼", "古德寺", "晴川阁", "巴公房子", "历史", "老街")
             addIf("live", "livehouse", "剧场", "剧院", "演出", "电影", "影院")
             addIf("market", "市集", "集市", "夜市", "街区", "步行街")
+        }
+
+        if ("pet_cafe" in traits) {
+            traits.remove("cafe")
+            traits.remove("small_shop")
+        }
+        if ("photo_studio" in traits) {
+            traits.remove("small_shop")
+        }
+        if ("student_chain" in traits) {
+            traits.remove("western")
+            traits.remove("noodle")
         }
 
         return traits
@@ -130,6 +145,7 @@ object RecommendationTraitAnalyzer {
             "bbq" -> "烧烤/烤肉"
             "coffee" -> "咖啡"
             "dessert" -> "甜品/茶饮"
+            "student_chain" -> "学生友好连锁"
             "noodle" -> "面食小吃"
             "western" -> "西餐/Brunch"
             "japanese" -> "日料"
@@ -138,8 +154,10 @@ object RecommendationTraitAnalyzer {
             "breakfast" -> "早餐"
             "bookstore" -> "书店"
             "cafe" -> "咖啡甜品"
+            "pet_cafe" -> "猫咖狗咖"
             "arcade" -> "电玩互动"
             "craft" -> "手作工坊"
+            "photo_studio" -> "写真自拍"
             "small_shop" -> "主理人小店"
             "museum" -> "博物馆"
             "gallery" -> "展览/美术馆"
@@ -298,7 +316,8 @@ class RecommendationFeedbackStore(context: Context) {
 
     fun recordNotInterested(
         title: String,
-        category: String
+        category: String,
+        tag: String? = null
     ) {
         val cleanTitle = title.cleanFeedbackText()
         if (cleanTitle.isBlank()) {
@@ -326,7 +345,7 @@ class RecommendationFeedbackStore(context: Context) {
         recordPreferenceEvent(
             title = cleanTitle,
             category = normalizedCategory,
-            tag = null,
+            tag = tag,
             action = ACTION_NOT_INTERESTED
         )
     }

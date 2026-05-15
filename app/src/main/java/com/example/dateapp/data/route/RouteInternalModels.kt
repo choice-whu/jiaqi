@@ -4,7 +4,9 @@ internal data class RouteDestination(
     val label: String,
     val latitude: Double,
     val longitude: Double,
-    val resolutionSource: String
+    val resolutionSource: String,
+    val isOpenNow: Boolean? = null,
+    val openingHours: String? = null
 )
 
 internal data class RouteMetrics(

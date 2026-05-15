@@ -237,14 +237,14 @@ fun WishListScreen(
             }
 
             WishPrimaryButton(
-                text = "把今晚交给运气",
+                text = "把今天交给运气",
                 icon = {
                     Icon(
                         imageVector = Icons.AutoMirrored.Outlined.ArrowForward,
                         contentDescription = null
                     )
                 },
-                enabled = uiState.wishItems.isNotEmpty() && !uiState.isParsing,
+                enabled = !uiState.isParsing,
                 onClick = onOpenDecision,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -404,7 +404,7 @@ private fun EmptyWishState(modifier: Modifier = Modifier) {
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    text = "先写下一条，今晚就会慢慢有形状。",
+                    text = "先写下一条，今天就会慢慢有形状。",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

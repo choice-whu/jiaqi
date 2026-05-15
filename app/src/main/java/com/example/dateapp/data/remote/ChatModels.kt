@@ -6,13 +6,26 @@ data class ChatRequest(
     val model: String,
     val messages: List<ChatMessage>,
     val temperature: Double = 0.08,
+    @SerializedName("presence_penalty")
+    val presencePenalty: Double? = null,
     @SerializedName("max_tokens")
     val maxTokens: Int? = null,
     @SerializedName("max_completion_tokens")
     val maxCompletionTokens: Int? = null,
     @SerializedName("reasoning_effort")
     val reasoningEffort: String? = null,
+    @SerializedName("response_format")
+    val responseFormat: ChatResponseFormat? = null,
+    val thinking: ChatThinkingConfig? = null,
     val stream: Boolean = false
+)
+
+data class ChatResponseFormat(
+    val type: String
+)
+
+data class ChatThinkingConfig(
+    val type: String
 )
 
 data class ChatMessage(
@@ -40,6 +53,7 @@ data class ParsedWish(
 
 data class AiDecisionRecommendation(
     val name: String,
+    val amapSearchKeyword: String?,
     val imageUrl: String?,
     val distanceDescription: String?,
     val tag: String?,
@@ -55,6 +69,10 @@ internal data class ParsedWishDto(
 
 internal data class AiDecisionRecommendationDto(
     val name: String? = null,
+    @SerializedName("display_name")
+    val displayName: String? = null,
+    @SerializedName("amap_search_keyword")
+    val amapSearchKeyword: String? = null,
     @SerializedName("image_url")
     val imageUrl: String? = null,
     @SerializedName("distance_desc")

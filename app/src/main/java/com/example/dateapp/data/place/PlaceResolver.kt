@@ -25,7 +25,9 @@ data class ResolvedPlace(
     val distanceLabel: String?,
     val confidence: PlaceConfidence,
     val source: String,
-    val isSuspiciousDistanceMismatch: Boolean
+    val isSuspiciousDistanceMismatch: Boolean,
+    val isOpenNow: Boolean? = null,
+    val openingHours: String? = null
 )
 
 class PlaceResolver(
@@ -45,11 +47,16 @@ class PlaceResolver(
             longitude = environment.longitude,
             source = environment.locationSource
         )
+        val displayName = recommendation.name.trim()
+        val searchKeyword = recommendation.amapSearchKeyword
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: displayName
         val routeTarget = RouteTargetRequest(
-            title = recommendation.name,
+            title = displayName,
             category = category,
-            displayLocation = null,
-            searchKeyword = recommendation.name,
+            displayLocation = displayName,
+            searchKeyword = searchKeyword,
             latitude = null,
             longitude = null,
             sourceLabel = "AI探索",
@@ -58,7 +65,8 @@ class PlaceResolver(
         val routeResolvedPlace = withTimeoutOrNull(timeoutMillis) {
             routePlanningRepository.resolvePlaceForDecision(
                 target = routeTarget,
-                origin = origin
+                origin = origin,
+                currentTime = environment.currentTime
             )
         }
 
@@ -72,7 +80,7 @@ class PlaceResolver(
         if (suspiciousMismatch) {
             Log.d(
                 TAG,
-                "place source=suspicious_distance name=${recommendation.name} aiDistance=$describedDistance measuredDistance=$measuredDistance"
+                "place source=suspicious_distance name=$displayName keyword=$searchKeyword aiDistance=$describedDistance measuredDistance=$measuredDistance"
             )
         }
 
@@ -94,15 +102,17 @@ class PlaceResolver(
         }
 
         return ResolvedPlace(
-            displayName = routeResolvedPlace?.label ?: recommendation.name,
-            routeKeyword = recommendation.name,
+            displayName = routeResolvedPlace?.label ?: displayName,
+            routeKeyword = routeResolvedPlace?.label ?: searchKeyword,
             latitude = routeResolvedPlace?.latitude,
             longitude = routeResolvedPlace?.longitude,
             directDistanceMeters = distanceMeters,
             distanceLabel = distanceLabel,
             confidence = confidence,
             source = routeResolvedPlace?.resolutionSource ?: "ai_distance",
-            isSuspiciousDistanceMismatch = suspiciousMismatch
+            isSuspiciousDistanceMismatch = suspiciousMismatch,
+            isOpenNow = routeResolvedPlace?.isOpenNow,
+            openingHours = routeResolvedPlace?.openingHours
         )
     }
 
@@ -134,6 +144,6 @@ class PlaceResolver(
     companion object {
         private const val TAG = "PlaceResolver"
         private const val DEFAULT_RESOLUTION_TIMEOUT_MS = 2_400L
-        const val MEAL_MAX_DIRECT_DISTANCE_METERS = 2_500
+        const val MEAL_MAX_DIRECT_DISTANCE_METERS = 4_200
     }
 }

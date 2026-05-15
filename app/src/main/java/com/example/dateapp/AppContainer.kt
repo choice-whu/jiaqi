@@ -10,6 +10,7 @@ import com.example.dateapp.data.place.PlaceResolver
 import com.example.dateapp.data.remote.AiNetworkModule
 import com.example.dateapp.data.remote.WeatherNetworkModule
 import com.example.dateapp.data.recommendation.RecommendationFeedbackStore
+import com.example.dateapp.data.recommendation.RecommendationTopicProvider
 import com.example.dateapp.data.route.RoutePlanningRepository
 
 class AppContainer(context: Context) {
@@ -45,11 +46,16 @@ class AppContainer(context: Context) {
     val decisionEngine: DecisionEngine by lazy {
         DecisionEngine(
             aiRepository = aiRepository,
-            placeResolver = placeResolver
+            placeResolver = placeResolver,
+            routePlanningRepository = routePlanningRepository
         )
     }
 
     val recommendationFeedbackStore: RecommendationFeedbackStore by lazy {
         RecommendationFeedbackStore(appContext)
+    }
+
+    val recommendationTopicProvider: RecommendationTopicProvider by lazy {
+        RecommendationTopicProvider()
     }
 }

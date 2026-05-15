@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import android.widget.Toast
 
 import androidx.compose.foundation.Canvas
@@ -359,7 +360,7 @@ private fun TimelineDestinationCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TimelinePill(text = "今晚目的地", emphasized = true)
+                        TimelinePill(text = "今日目的地", emphasized = true)
                         TimelinePill(text = routePlan.sourceLabel, emphasized = false)
                     }
 
@@ -396,6 +397,9 @@ fun openAmapRouteCompat(
     context: Context,
     routePlan: TimelineRoutePlan
 ) {
+    if (!TimelineExternalLaunchDebouncer.tryAcquire("amap:${routePlan.destinationLatitude},${routePlan.destinationLongitude}")) {
+        return
+    }
     val transportType = if (routePlan.transportMode == RouteTransportMode.WALK) "2" else "0"
     val appUri = Uri.parse("amapuri://route/plan/").buildUpon()
         .appendQueryParameter("sourceApplication", "DateApp")
@@ -411,7 +415,7 @@ fun openAmapRouteCompat(
 
     val appIntent = Intent(Intent.ACTION_VIEW, appUri).apply {
         setPackage("com.autonavi.minimap")
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     }
 
     val webMode = if (routePlan.transportMode == RouteTransportMode.WALK) "walk" else "car"
@@ -424,7 +428,7 @@ fun openAmapRouteCompat(
         .appendQueryParameter("src", "DateApp")
         .build()
     val webIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     }
 
     try {
@@ -439,6 +443,22 @@ fun openAmapRouteCompat(
         }
     } catch (_: SecurityException) {
         Toast.makeText(context, "暂时无法打开高德地图", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private object TimelineExternalLaunchDebouncer {
+    private const val WINDOW_MS = 1_500L
+    private var lastKey: String? = null
+    private var lastLaunchAtMs: Long = 0L
+
+    fun tryAcquire(key: String): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (lastKey == key && now - lastLaunchAtMs < WINDOW_MS) {
+            return false
+        }
+        lastKey = key
+        lastLaunchAtMs = now
+        return true
     }
 }
 
@@ -459,7 +479,7 @@ private fun TimelineLoadingState(
         ) {
             TimelinePill(text = "整理路线中", emphasized = true)
             Text(
-                text = "正在结合当前位置与目的地，计算今晚最顺手的一段路。",
+                text = "正在结合当前位置与目的地，计算今天最顺手的一段路。",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Medium
             )
@@ -496,7 +516,7 @@ private fun TimelineEmptyState(
                 fontWeight = FontWeight.SemiBold
             )
             Text(
-                text = "先回到刮刮乐，把今晚的答案抽出来。",
+                text = "先回到刮刮乐，把今天的答案抽出来。",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

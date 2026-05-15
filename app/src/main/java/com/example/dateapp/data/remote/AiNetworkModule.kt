@@ -10,9 +10,9 @@ import java.util.concurrent.TimeUnit
 
 object AiNetworkModule {
 
-    private const val FALLBACK_BASE_URL = "https://www.xyxyapi.com/"
-    private const val FALLBACK_MODEL = "gpt-5.4-mini"
-    private const val FALLBACK_DECISION_MODEL = "gpt-5.4-mini"
+    private const val FALLBACK_BASE_URL = "https://api.deepseek.com/"
+    private const val FALLBACK_MODEL = "deepseek-v4-flash"
+    private const val FALLBACK_DECISION_MODEL = "deepseek-v4-flash"
     private const val JSON_CONTENT_TYPE = "application/json"
 
     val defaultModel: String
@@ -32,9 +32,9 @@ object AiNetworkModule {
 
     private val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .callTimeout(15, TimeUnit.SECONDS)
+            .callTimeout(25, TimeUnit.SECONDS)
             .connectTimeout(5, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(25, TimeUnit.SECONDS)
             .writeTimeout(5, TimeUnit.SECONDS)
             .addInterceptor(authInterceptor)
             .addInterceptor(loggingInterceptor)

@@ -81,8 +81,51 @@ object RoutePlaceCatalog {
 
     fun isBadPlayDestinationPoi(poi: PoiItem): Boolean {
         val text = poi.searchableText()
+        if (hardBadPlayRetailKeywords.any(text::contains)) {
+            return true
+        }
+
+        val ordinaryRetail = ordinaryRetailPlayRejectKeywords.any(text::contains)
+        val experientialRetail = experientialRetailProtectKeywords.any(text::contains)
+        if (ordinaryRetail && !experientialRetail) {
+            return true
+        }
+
         val protectedPublicPlace = playPublicPlaceKeywords.any(text::contains)
         return !protectedPublicPlace && badPlayDestinationPoiKeywords.any(text::contains)
+    }
+
+    fun isLowDateMealPoi(poi: PoiItem): Boolean {
+        val text = poi.searchableText()
+        return lowDateMealPoiKeywords.any(text::contains)
+    }
+
+    fun isConcreteDecisionPoi(
+        poi: PoiItem,
+        category: String
+    ): Boolean {
+        if (poi.latLonPoint == null) {
+            return false
+        }
+
+        val title = poi.title.orEmpty().trim()
+        val address = poi.snippet.orEmpty().trim()
+        val type = poi.typeDes.orEmpty().lowercase(Locale.ROOT)
+        val text = poi.searchableText()
+        if (title.length < 2 || address.isBlank()) {
+            return false
+        }
+
+        return if (category == "meal") {
+            foodServicePoiKeywords.any(type::contains) ||
+                foodServicePoiKeywords.any(text::contains)
+        } else {
+            val positiveType = concretePlayPoiTypeKeywords.any(type::contains) ||
+                concretePlayPoiTypeKeywords.any(text::contains)
+            val namedExperience = concretePlayNameKeywords.any(text::contains) ||
+                photoExperiencePoiKeywords.any(text::contains)
+            positiveType || namedExperience
+        }
     }
 
     fun isPoiTypeCompatibleWithTarget(
@@ -124,6 +167,21 @@ object RoutePlaceCatalog {
             targetHasAny(creativeBlockTargetKeywords) -> poiHasAny(creativeBlockPoiKeywords) &&
                 !poiHasAny(nonScenicPoiKeywords) &&
                 !poiHasAny(foodServicePoiKeywords)
+            targetHasAny(gardenTargetKeywords) -> poiHasAny(gardenPoiKeywords) &&
+                !poiHasAny(gardenMicroPoiKeywords) &&
+                !poiHasAny(photoExperiencePoiKeywords) &&
+                !poiHasAny(nonScenicPoiKeywords) &&
+                !poiHasAny(foodServicePoiKeywords)
+            targetHasAny(photoTargetKeywords) -> poiHasAny(photoExperiencePoiKeywords) &&
+                !poiHasAny(photoEquipmentPoiKeywords) &&
+                !poiHasAny(nonScenicPoiKeywords)
+            targetHasAny(petCafeTargetKeywords) -> poiHasAny(petCafePoiKeywords) &&
+                !poiHasAny(nonScenicPoiKeywords)
+            targetHasAny(bakingTargetKeywords) -> poiHasAny(bakingExperiencePoiKeywords) &&
+                !poiHasAny(nonScenicPoiKeywords) &&
+                !poiHasAny(ordinaryDessertChainKeywords)
+            targetHasAny(craftTargetKeywords) -> poiHasAny(craftPoiKeywords) && !poiHasAny(nonScenicPoiKeywords)
+            targetHasAny(arcadeTargetKeywords) -> poiHasAny(arcadePoiKeywords) && !poiHasAny(nonScenicPoiKeywords)
             targetHasAny(shopPlayTargetKeywords) -> poiHasAny(shopPlayPoiKeywords) && !poiHasAny(nonScenicPoiKeywords)
             targetHasAny(mallPlayTargetKeywords) -> poiHasAny(mallPlayPoiKeywords) && !poiHasAny(nonScenicPoiKeywords)
             targetHasAny(cafePlayTargetKeywords) -> poiHasAny(cafePlayPoiKeywords) && !poiHasAny(nonScenicPoiKeywords)
@@ -226,6 +284,12 @@ object RoutePlaceCatalog {
         "出入口",
         "入口",
         "出口",
+        "建设中",
+        "施工中",
+        "装修中",
+        "暂停开放",
+        "暂不开放",
+        "安检处",
         "售票处",
         "游客中心",
         "服务区",
@@ -234,7 +298,12 @@ object RoutePlaceCatalog {
         "地铁站",
         "充电站",
         "警务室",
-        "管理处"
+        "管理处",
+        "文展大楼",
+        "南主馆",
+        "北主馆",
+        "特展厅",
+        "展厅"
     )
 
     private val playPublicPlaceKeywords = listOf(
@@ -260,7 +329,6 @@ object RoutePlaceCatalog {
         "百货",
         "买手店",
         "主理人",
-        "杂货",
         "唱片",
         "黑胶",
         "潮玩",
@@ -306,6 +374,91 @@ object RoutePlaceCatalog {
         "小区",
         "足浴",
         "按摩"
+    )
+
+    private val hardBadPlayRetailKeywords = listOf(
+        "土特产",
+        "特产",
+        "烟酒",
+        "名烟名酒",
+        "烟草",
+        "副食",
+        "便利店",
+        "生活超市",
+        "超市",
+        "商行",
+        "经营部",
+        "批发部",
+        "开业花篮",
+        "花篮",
+        "花束定制",
+        "粮油",
+        "干货"
+    )
+
+    private val ordinaryRetailPlayRejectKeywords = listOf(
+        "购物相关场所",
+        "普通商店",
+        "零售",
+        "批发",
+        "专营",
+        "小百货",
+        "日用百货",
+        "礼品饰品店",
+        "鲜花店",
+        "花店",
+        "茶叶店",
+        "母婴",
+        "服装",
+        "鞋帽",
+        "眼镜店",
+        "手机",
+        "数码",
+        "电器"
+    )
+
+    private val experientialRetailProtectKeywords = listOf(
+        "买手",
+        "主理人",
+        "生活方式",
+        "中古",
+        "黑胶",
+        "唱片",
+        "潮玩",
+        "盲盒",
+        "玩具",
+        "模型",
+        "谷子",
+        "文创",
+        "市集",
+        "集市",
+        "快闪",
+        "展览",
+        "展馆",
+        "展陈",
+        "看展",
+        "画廊",
+        "艺术",
+        "手作",
+        "手工",
+        "diy",
+        "陶艺",
+        "香薰",
+        "银饰",
+        "拼豆",
+        "tufting",
+        "工作室",
+        "体验",
+        "植物",
+        "花艺",
+        "咖啡",
+        "甜品",
+        "猫咖",
+        "狗咖",
+        "摄影",
+        "写真",
+        "自拍",
+        "复古"
     )
 
     private val parkTargetKeywords = listOf(
@@ -448,7 +601,6 @@ object RoutePlaceCatalog {
         "小店",
         "买手店",
         "主理人",
-        "杂货",
         "唱片",
         "黑胶",
         "潮玩",
@@ -463,6 +615,122 @@ object RoutePlaceCatalog {
         "中古",
         "生活方式",
         "快闪"
+    )
+
+    private val craftTargetKeywords = listOf(
+        "手作",
+        "手工",
+        "diy",
+        "陶艺",
+        "香薰",
+        "银饰",
+        "簇绒",
+        "tufting",
+        "地毯",
+        "烘焙",
+        "蛋糕",
+        "甜品diy",
+        "拉坯",
+        "皮具",
+        "木作",
+        "拼豆"
+    )
+
+    private val bakingTargetKeywords = listOf(
+        "烘焙",
+        "蛋糕diy",
+        "甜品diy",
+        "曲奇",
+        "巧克力diy"
+    )
+
+    private val bakingExperiencePoiKeywords = listOf(
+        "diy",
+        "手作",
+        "手工",
+        "烘焙",
+        "蛋糕diy",
+        "甜品diy",
+        "体验",
+        "工作室"
+    )
+
+    private val petCafeTargetKeywords = listOf(
+        "猫咖",
+        "狗咖",
+        "宠物咖啡",
+        "宠物互动",
+        "撸猫",
+        "撸狗",
+        "萌宠",
+        "动物互动"
+    )
+
+    private val petCafePoiKeywords = listOf(
+        "猫咖",
+        "狗咖",
+        "宠物咖啡",
+        "宠物互动",
+        "撸猫",
+        "撸狗",
+        "萌宠",
+        "异宠",
+        "爬宠",
+        "小动物"
+    )
+
+    private val craftPoiKeywords = listOf(
+        "手作",
+        "手工",
+        "diy",
+        "陶艺",
+        "香薰",
+        "银饰",
+        "簇绒",
+        "tufting",
+        "地毯",
+        "烘焙",
+        "蛋糕",
+        "甜品",
+        "拉坯",
+        "皮具",
+        "木作",
+        "拼豆",
+        "休闲场所",
+        "娱乐场所",
+        "糕饼店",
+        "礼品饰品店",
+        "购物相关场所"
+    )
+
+    private val arcadeTargetKeywords = listOf(
+        "电玩城",
+        "街机",
+        "电玩",
+        "游戏",
+        "switch",
+        "ps5",
+        "vr",
+        "桌游",
+        "密室",
+        "剧本"
+    )
+
+    private val arcadePoiKeywords = listOf(
+        "电玩城",
+        "街机",
+        "电玩",
+        "游戏厅",
+        "游戏",
+        "switch",
+        "ps5",
+        "vr",
+        "桌游",
+        "密室",
+        "剧本",
+        "娱乐场所",
+        "休闲场所",
+        "体育休闲服务"
     )
 
     private val shopPlayPoiKeywords = listOf(
@@ -484,6 +752,92 @@ object RoutePlaceCatalog {
         "休闲娱乐",
         "生活方式",
         "快闪"
+    )
+
+    private val photoTargetKeywords = listOf(
+        "照相馆",
+        "写真",
+        "自拍馆",
+        "大头贴",
+        "胶片写真",
+        "证件照写真",
+        "复古照相"
+    )
+
+    private val photoExperiencePoiKeywords = listOf(
+        "照相馆",
+        "写真",
+        "自拍馆",
+        "大头贴",
+        "摄影工作室",
+        "摄影冲印",
+        "影像馆",
+        "照相",
+        "拍照",
+        "证件照"
+    )
+
+    private val photoEquipmentPoiKeywords = listOf(
+        "相机",
+        "摄影器材",
+        "器材",
+        "镜头",
+        "富士",
+        "尼康",
+        "佳能",
+        "索尼",
+        "大疆",
+        "dji",
+        "数码",
+        "电子",
+        "维修",
+        "租赁",
+        "专卖"
+    )
+
+    private val gardenTargetKeywords = listOf(
+        "花市",
+        "植物园",
+        "花园",
+        "植物店",
+        "花艺",
+        "鲜花",
+        "花卉",
+        "绿植"
+    )
+
+    private val gardenPoiKeywords = listOf(
+        "植物园",
+        "花园",
+        "花市",
+        "花卉",
+        "花艺",
+        "鲜花",
+        "花鸟鱼虫市场",
+        "公园",
+        "风景名胜",
+        "旅游景点",
+        "园林",
+        "盆景",
+        "多肉",
+        "绿植"
+    )
+
+    private val gardenMicroPoiKeywords = listOf(
+        "品种群",
+        "品种资源",
+        "资源圃",
+        "枸骨",
+        "垂枝",
+        "惊春",
+        "朱砂",
+        "三友",
+        "青未了",
+        "黄香",
+        "洒金",
+        "樟",
+        "梅雪争春",
+        "梅妻鹤子"
     )
 
     private val mallPlayTargetKeywords = listOf(
@@ -552,6 +906,65 @@ object RoutePlaceCatalog {
         "冷饮店"
     )
 
+    private val concretePlayPoiTypeKeywords = listOf(
+        "体育休闲服务",
+        "休闲场所",
+        "娱乐场所",
+        "风景名胜",
+        "旅游景点",
+        "公园广场",
+        "科教文化服务",
+        "美术馆",
+        "博物馆",
+        "展览馆",
+        "剧场",
+        "电影院",
+        "购物服务",
+        "专卖店",
+        "礼品饰品店",
+        "文化用品店",
+        "商场",
+        "购物中心",
+        "餐饮服务",
+        "咖啡",
+        "茶艺馆",
+        "冷饮店"
+    )
+
+    private val concretePlayNameKeywords = listOf(
+        "diy",
+        "手作",
+        "陶艺",
+        "银饰",
+        "调香",
+        "tufting",
+        "簇绒",
+        "画室",
+        "体验馆",
+        "密室",
+        "桌游",
+        "剧本",
+        "vr",
+        "电玩城",
+        "射箭",
+        "攀岩",
+        "保龄球",
+        "滑冰",
+        "美术馆",
+        "艺术馆",
+        "艺术空间",
+        "画廊",
+        "展览",
+        "展馆",
+        "展陈",
+        "看展",
+        "公园",
+        "江滩",
+        "码头",
+        "景区",
+        "蜡像馆"
+    )
+
     private val religiousTargetKeywords = listOf(
         "寺",
         "寺庙",
@@ -579,6 +992,93 @@ object RoutePlaceCatalog {
         "商务",
         "产业园",
         "停车场",
-        "出入口"
+        "出入口",
+        "闸口",
+        "培训",
+        "培训机构",
+        "留学",
+        "辅导",
+        "教育",
+        "学校",
+        "校区",
+        "教学",
+        "便利店",
+        "超市",
+        "烟酒",
+        "酒陈香",
+        "陈香烟酒",
+        "彩票",
+        "体彩",
+        "福彩",
+        "志愿者",
+        "义务植树",
+        "植树点",
+        "广告",
+        "快印",
+        "打印",
+        "图文",
+        "喷绘",
+        "雕塑工作室",
+        "传媒",
+        "文化传媒",
+        "展览服务",
+        "会展",
+        "庆典",
+        "策划",
+        "工程",
+        "设备",
+        "制作中心",
+        "3d打印",
+        "群众艺术馆",
+        "文化馆",
+        "展厅",
+        "女装",
+        "男装",
+        "服装",
+        "内衣",
+        "鞋帽",
+        "批发",
+        "农展",
+        "农产品",
+        "展销"
+    )
+
+    private val ordinaryDessertChainKeywords = listOf(
+        "dq",
+        "奈雪",
+        "茶颜悦色",
+        "星巴克",
+        "瑞幸",
+        "喜茶",
+        "沪上阿姨",
+        "古茗",
+        "蜜雪冰城",
+        "椰不二",
+        "冰淇淋",
+        "冷饮店"
+    )
+
+    private val lowDateMealPoiKeywords = listOf(
+        "麦当劳",
+        "肯德基",
+        "必胜客",
+        "达美乐",
+        "塔斯汀",
+        "华莱士",
+        "正新鸡排",
+        "德克士",
+        "汉堡王",
+        "赛百味",
+        "张亮麻辣烫",
+        "杨国福",
+        "小胡鸭",
+        "周黑鸭",
+        "绝味",
+        "久久鸭",
+        "自选",
+        "盖饭",
+        "盒饭",
+        "便利店",
+        "食堂"
     )
 }

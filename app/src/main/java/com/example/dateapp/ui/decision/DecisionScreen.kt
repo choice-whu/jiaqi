@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.graphics.Paint
 import android.net.Uri
 import android.os.SystemClock
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -236,22 +237,27 @@ fun DecisionScreen(
                 }
             }
 
-            uiState.selectedCard?.let {
-                Row(
+            AnimatedVisibility(
+                visible = uiState.selectedCard != null,
+                enter = fadeIn(animationSpec = tween(180)) + expandVertically(
+                    animationSpec = spring(
+                        dampingRatio = 0.86f,
+                        stiffness = Spring.StiffnessMediumLow
+                    )
+                ),
+                exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(
+                    animationSpec = spring(
+                        dampingRatio = 0.9f,
+                        stiffness = Spring.StiffnessMedium
+                    )
+                )
+            ) {
+                DecisionActionButton(
+                    text = "生成新建议",
+                    onClick = handleDrawAnotherWish,
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    DecisionActionButton(
-                        text = "生成新建议",
-                        onClick = handleDrawAnotherWish,
-                        modifier = Modifier.weight(1f),
-                        enabled = !uiState.isAiSearching
-                    )
-                    DecisionMetaPill(
-                        text = "待选 ${uiState.availableCount} 条",
-                        emphasized = true
-                    )
-                }
+                    enabled = !uiState.isAiSearching
+                )
             }
         }
 
@@ -356,6 +362,9 @@ private fun openXiaohongshuSearch(
     context: Context,
     card: DecisionCardUiModel
 ) {
+    if (!ExternalLaunchDebouncer.tryAcquire("xhs:${card.title}")) {
+        return
+    }
     val keyword = buildXiaohongshuSearchKeyword(card)
     val webUri = Uri.parse("https://www.xiaohongshu.com/search_result")
         .buildUpon()
@@ -368,16 +377,17 @@ private fun openXiaohongshuSearch(
 
     val appIntent = Intent(Intent.ACTION_VIEW, appUri).apply {
         setPackage(XIAOHONGSHU_PACKAGE)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     }
     val packagedWebIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
         setPackage(XIAOHONGSHU_PACKAGE)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     }
     val webIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     }
 
+    Log.d("DecisionScreen", "xiaohongshu search keyword=$keyword appUri=$appUri webUri=$webUri")
     val opened = listOf(appIntent, packagedWebIntent, webIntent).any { intent ->
         runCatching {
             context.startActivity(intent)
@@ -392,9 +402,41 @@ private fun openXiaohongshuSearch(
     }
 }
 
+private object ExternalLaunchDebouncer {
+    private const val WINDOW_MS = 1_500L
+    private var lastKey: String? = null
+    private var lastLaunchAtMs: Long = 0L
+
+    fun tryAcquire(key: String): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (lastKey == key && now - lastLaunchAtMs < WINDOW_MS) {
+            Log.d("DecisionScreen", "external launch debounced key=$key")
+            return false
+        }
+        lastKey = key
+        lastLaunchAtMs = now
+        return true
+    }
+}
+
 private fun buildXiaohongshuSearchKeyword(card: DecisionCardUiModel): String {
-    val placeName = (card.routeKeyword ?: card.locationLabel ?: card.title)
+    val placeName = card.title
         .trim()
+        .substringBefore("·")
+        .substringBefore("｜")
+        .substringBefore("|")
+        .substringBefore(" - ")
+        .substringBefore("（")
+        .substringBefore("(")
+        .removePrefix("去")
+        .removeSuffix("附近")
+        .trim()
+        .ifBlank {
+            card.locationLabel
+                ?.substringBefore("·")
+                ?.trim()
+                .orEmpty()
+        }
         .ifBlank { card.title.trim() }
     return if (placeName.contains("武汉") || placeName.contains("湖北")) {
         placeName

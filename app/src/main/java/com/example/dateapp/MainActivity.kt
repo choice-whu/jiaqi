@@ -1,10 +1,15 @@
 package com.example.dateapp
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.tween
@@ -23,6 +28,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -50,7 +56,8 @@ class MainActivity : ComponentActivity() {
                 repository = appContainer.wishRepository,
                 decisionEngine = appContainer.decisionEngine,
                 environmentRepository = appContainer.environmentRepository,
-                recommendationFeedbackStore = appContainer.recommendationFeedbackStore
+                recommendationFeedbackStore = appContainer.recommendationFeedbackStore,
+                recommendationTopicProvider = appContainer.recommendationTopicProvider
             )
         )[DecisionViewModel::class.java]
         val wishViewModel = ViewModelProvider(
@@ -75,6 +82,27 @@ class MainActivity : ComponentActivity() {
                 var currentScreen by remember { mutableStateOf(AppScreen.Wish) }
                 val composeContext = LocalContext.current
                 val coroutineScope = rememberCoroutineScope()
+                val openDecisionScreen = {
+                    decisionViewModel.drawAnotherWish()
+                    currentScreen = AppScreen.Decision
+                }
+                val decisionPermissionLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.RequestMultiplePermissions()
+                ) {
+                    openDecisionScreen()
+                }
+                val requestOrOpenDecision = {
+                    if (hasLocationPermission(composeContext)) {
+                        openDecisionScreen()
+                    } else {
+                        decisionPermissionLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                            )
+                        )
+                    }
+                }
 
                 BackHandler(enabled = currentScreen != AppScreen.Wish) {
                     when (currentScreen) {
@@ -119,10 +147,7 @@ class MainActivity : ComponentActivity() {
                                     onAddWishFromRawText = wishViewModel::addWishFromRawText,
                                     onDeleteWish = wishViewModel::deleteWish,
                                     onToggleWishVisitedState = wishViewModel::toggleWishVisitedState,
-                                    onOpenDecision = {
-                                        decisionViewModel.drawAnotherWish()
-                                        currentScreen = AppScreen.Decision
-                                    },
+                                    onOpenDecision = requestOrOpenDecision,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
@@ -198,4 +223,15 @@ class MainActivity : ComponentActivity() {
         Decision,
         Timeline
     }
+}
+
+private fun hasLocationPermission(context: Context): Boolean {
+    return ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
 }
