@@ -275,7 +275,10 @@ class DecisionViewModel(
                 currentCardName = _uiState.value.selectedCard?.title,
                 hardAvoidNames = hardAvoidNames(),
                 nearbyMallName = null,
-                preferenceProfile = preferenceProfileFor(targetCategory)
+                preferenceProfile = preferenceProfileFor(
+                    category = targetCategory,
+                    hour = environment.currentTime.hour
+                )
             )
         ).getOrElse { throwable ->
             handleAiFailure(
@@ -358,7 +361,10 @@ class DecisionViewModel(
                     hardAvoidNames = hardAvoidNames(),
                     nearbyMallName = null,
                     useCandidateBatch = true,
-                    preferenceProfile = preferenceProfileFor(targetCategory)
+                    preferenceProfile = preferenceProfileFor(
+                        category = targetCategory,
+                        hour = environment.currentTime.hour
+                    )
                 )
             )
 
@@ -507,12 +513,18 @@ class DecisionViewModel(
         )
     }
 
-    private fun preferenceProfileFor(category: String): com.example.dateapp.data.recommendation.RecommendationPreferenceProfile {
-        val profile = recommendationFeedbackStore.preferenceProfile(category)
+    private fun preferenceProfileFor(
+        category: String,
+        hour: Int? = null
+    ): com.example.dateapp.data.recommendation.RecommendationPreferenceProfile {
+        val profile = recommendationFeedbackStore.preferenceProfile(
+            category = category,
+            hour = hour
+        )
         profile.promptHint()?.let { hint ->
             Log.d(
                 TAG,
-                "decision source=PREFERENCE_PROFILE category=$category events=${profile.eventCount} hint=$hint"
+                "decision source=PREFERENCE_PROFILE category=$category hour=${hour ?: "any"} events=${profile.eventCount} hint=$hint"
             )
         }
         return profile
@@ -880,7 +892,10 @@ class DecisionViewModel(
         targetCategory: String
     ): DecisionCardUiModel? {
         val currentTitle = _uiState.value.selectedCard?.title
-        val profile = preferenceProfileFor(targetCategory)
+        val profile = preferenceProfileFor(
+            category = targetCategory,
+            hour = environment.currentTime.hour
+        )
         data class ScoredWish(
             val wish: WishItem,
             val personalizationScore: Int,

@@ -1,7 +1,10 @@
 package com.example.dateapp.data.recommendation
 
 import android.content.Context
+import java.time.Instant
+import java.time.ZoneId
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 data class RecommendationPreferenceProfile(
@@ -9,7 +12,8 @@ data class RecommendationPreferenceProfile(
     val likedTraits: List<String>,
     val dislikedTraits: List<String>,
     val traitScores: Map<String, Int>,
-    val eventCount: Int
+    val eventCount: Int,
+    val timeSlot: String? = null
 ) {
     val isEmpty: Boolean
         get() = likedTraits.isEmpty() && dislikedTraits.isEmpty()
@@ -51,9 +55,16 @@ data class RecommendationPreferenceProfile(
             eventCount >= 4 -> "Clear preference"
             else -> "Soft preference"
         }
+        val timeLabel = timeSlot
+            ?.let { RecommendationTraitAnalyzer.labelForTimeSlot(it) }
+            ?.takeIf { it.isNotBlank() }
 
         return buildString {
             if (liked.isNotBlank()) {
+                if (timeLabel != null) {
+                    append(timeLabel)
+                    append(' ')
+                }
                 append(strengthLabel)
                 append(": likes ")
                 append(liked)
@@ -141,6 +152,27 @@ object RecommendationTraitAnalyzer {
         }
     }
 
+    fun timeSlotForHour(hour: Int): String {
+        return when (hour.coerceIn(0, 23)) {
+            in 5..10 -> "morning"
+            in 11..13 -> "midday"
+            in 14..17 -> "afternoon"
+            in 18..22 -> "evening"
+            else -> "late_night"
+        }
+    }
+
+    fun labelForTimeSlot(timeSlot: String): String {
+        return when (timeSlot) {
+            "morning" -> "Morning"
+            "midday" -> "Lunch-time"
+            "afternoon" -> "Afternoon"
+            "evening" -> "Evening"
+            "late_night" -> "Late-night"
+            else -> ""
+        }
+    }
+
     private fun String.normalizeCategoryForTraits(): String {
         return when (trim().lowercase(Locale.ROOT)) {
             "meal" -> "meal"
@@ -195,8 +227,12 @@ class RecommendationFeedbackStore(context: Context) {
             }
     }
 
-    fun preferenceProfile(category: String): RecommendationPreferenceProfile {
+    fun preferenceProfile(
+        category: String,
+        hour: Int? = null
+    ): RecommendationPreferenceProfile {
         val normalizedCategory = category.normalizeCategory()
+        val targetTimeSlot = hour?.let(RecommendationTraitAnalyzer::timeSlotForHour)
         val cutoff = System.currentTimeMillis() - PREFERENCE_MEMORY_MS
         val events = readList(KEY_PREFERENCE_EVENTS)
             .mapNotNull(::parsePreferenceEvent)
@@ -221,9 +257,12 @@ class RecommendationFeedbackStore(context: Context) {
             val recencyMultiplier = recencyMultiplier(
                 ageMillis = System.currentTimeMillis() - event.timestamp
             )
-            val weightedAction = (actionWeight * recencyMultiplier)
+            val timeMultiplier = targetTimeSlot
+                ?.let { timeSlotMultiplier(it, event.timestamp) }
+                ?: 1.0
+            val weightedAction = (actionWeight * recencyMultiplier * timeMultiplier)
                 .roundToInt()
-                .coerceIn(-8, 8)
+                .coerceIn(-9, 9)
             if (weightedAction == 0) {
                 return@forEach
             }
@@ -252,7 +291,8 @@ class RecommendationFeedbackStore(context: Context) {
             likedTraits = likedTraits,
             dislikedTraits = dislikedTraits,
             traitScores = traitScores,
-            eventCount = events.size
+            eventCount = events.size,
+            timeSlot = targetTimeSlot
         )
     }
 
@@ -301,6 +341,29 @@ class RecommendationFeedbackStore(context: Context) {
             ageDays <= 30.0 -> 0.7
             else -> 0.55
         }
+    }
+
+    private fun timeSlotMultiplier(
+        targetTimeSlot: String,
+        eventTimestamp: Long
+    ): Double {
+        val eventTimeSlot = eventTimeSlot(eventTimestamp)
+        val distance = abs(
+            TIME_SLOT_ORDER.indexOf(targetTimeSlot) - TIME_SLOT_ORDER.indexOf(eventTimeSlot)
+        )
+        return when {
+            eventTimeSlot == targetTimeSlot -> 1.35
+            distance == 1 -> 0.85
+            else -> 0.55
+        }
+    }
+
+    private fun eventTimeSlot(timestamp: Long): String {
+        val hour = Instant
+            .ofEpochMilli(timestamp)
+            .atZone(APP_ZONE_ID)
+            .hour
+        return RecommendationTraitAnalyzer.timeSlotForHour(hour)
     }
 
     fun recordPositiveFeedback(
@@ -507,5 +570,7 @@ class RecommendationFeedbackStore(context: Context) {
         private const val DAY_MILLIS = 24L * 60L * 60L * 1000L
         private const val POSITIVE_TRAIT_THRESHOLD = 4
         private const val NEGATIVE_TRAIT_THRESHOLD = -4
+        private val APP_ZONE_ID = ZoneId.of("Asia/Shanghai")
+        private val TIME_SLOT_ORDER = listOf("morning", "midday", "afternoon", "evening", "late_night")
     }
 }
