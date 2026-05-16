@@ -824,10 +824,10 @@ class DecisionViewModel(
         private const val PREFETCH_FAILURE_BACKOFF_MS = 18_000L
         private const val RECENT_RECOMMENDATION_MEMORY = 36
         private const val DISLIKED_RECOMMENDATION_MEMORY = 64
-        private const val RECENT_PROMPT_AVOID_MEMORY = 3
+        private const val RECENT_PROMPT_AVOID_MEMORY = 10
         private const val DISLIKED_PROMPT_AVOID_MEMORY = 5
         private const val HARD_DISLIKED_PROMPT_MEMORY = 8
-        private const val PROMPT_AVOID_NAME_LIMIT = 8
+        private const val PROMPT_AVOID_NAME_LIMIT = 12
         private const val RECENT_TOPIC_MEMORY = 4
         private const val RECENT_AI_CARD_POOL_SIZE = 8
 

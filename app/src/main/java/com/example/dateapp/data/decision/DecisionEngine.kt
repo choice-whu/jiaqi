@@ -488,10 +488,10 @@ class DecisionEngine(
             )
             return null
         }
-        if (request.useCandidateBatch && (isCurrentCardRepeat || isSoftRepeat)) {
+        if (isCurrentCardRepeat || isSoftRepeat) {
             Log.d(
                 TAG,
-                "decision source=ENGINE_BATCH_REPEAT_SKIP targetCategory=${request.targetCategory} name=${recommendation.name}"
+                "decision source=ENGINE_REPEAT_SKIP targetCategory=${request.targetCategory} name=${recommendation.name} isCurrentCard=$isCurrentCardRepeat isSoft=$isSoftRepeat"
             )
             return null
         }
@@ -553,11 +553,6 @@ class DecisionEngine(
             return null
         }
 
-        val repeatPenalty = when {
-            isCurrentCardRepeat -> CURRENT_CARD_REPEAT_PENALTY
-            isSoftRepeat -> SOFT_REPEAT_PENALTY
-            else -> 0
-        }
         val personalScore = personalizationScore(
             recommendation = recommendation,
             resolvedPlace = resolvedPlace,
@@ -604,10 +599,10 @@ class DecisionEngine(
             )
             return null
         }
-        val finalScore = baseScore + personalScore + areaScore + poiTypeScore + dateAppealScore + studentCoupleScore - repeatPenalty
+        val finalScore = baseScore + personalScore + areaScore + poiTypeScore + dateAppealScore + studentCoupleScore
         Log.d(
             TAG,
-            "decision source=ENGINE_SCORE targetCategory=${request.targetCategory} name=${recommendation.name} base=$baseScore time=$timeScore weather=$weatherScore personal=$personalScore area=$areaScore poiType=$poiTypeScore appeal=$dateAppealScore student=$studentCoupleScore repeatPenalty=$repeatPenalty final=$finalScore distance=${resolvedPlace.directDistanceMeters} source=${resolvedPlace.source}"
+            "decision source=ENGINE_SCORE targetCategory=${request.targetCategory} name=${recommendation.name} base=$baseScore time=$timeScore weather=$weatherScore personal=$personalScore area=$areaScore poiType=$poiTypeScore appeal=$dateAppealScore student=$studentCoupleScore final=$finalScore distance=${resolvedPlace.directDistanceMeters} source=${resolvedPlace.source}"
         )
 
         return CandidateScore(
@@ -986,8 +981,6 @@ class DecisionEngine(
         private const val BACKGROUND_CANDIDATE_LIMIT = 2
         private const val FRONT_CANDIDATE_LIMIT = 5
         private const val FRONT_MIN_DISPLAY_SCORE = 12
-        private const val SOFT_REPEAT_PENALTY = 5
-        private const val CURRENT_CARD_REPEAT_PENALTY = 8
         private const val PERSONALIZATION_REJECTION_THRESHOLD = -8
         private const val STUDENT_COUPLE_REJECTION_THRESHOLD = -11
     }
