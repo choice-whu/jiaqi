@@ -1,5 +1,6 @@
 package com.example.dateapp.data.decision
 
+import com.example.dateapp.data.WuhanKnowledgeConfig
 import com.example.dateapp.data.place.ResolvedPlace
 import com.example.dateapp.data.remote.AiDecisionRecommendation
 import java.util.Locale
@@ -128,27 +129,7 @@ class DecisionPlacePolicy {
         private const val PLAY_DISTANCE_MISMATCH_MULTIPLIER = 4
         private const val PLAY_DISTANCE_MISMATCH_BUFFER_METERS = 3_000
 
-        private val tripWorthySignals = listOf(
-            "东湖",
-            "黄鹤楼",
-            "湖北省博物馆",
-            "省博",
-            "美术馆",
-            "博物馆",
-            "江滩",
-            "古德寺",
-            "晴川阁",
-            "园博园",
-            "植物园",
-            "汉口江滩",
-            "武昌江滩",
-            "汉阳造",
-            "黎黄陂路",
-            "武汉天地",
-            "琴台",
-            "归元寺",
-            "昙华林"
-        )
+        private val tripWorthySignals = WuhanKnowledgeConfig.tripWorthySignals
 
         private val specialExperienceSignals = listOf(
             "diy",
@@ -203,21 +184,6 @@ class DecisionPlacePolicy {
             "动物园"
         )
 
-        private val longPlaySignals = listOf(
-            "黄鹤楼",
-            "晴川阁",
-            "古德寺",
-            "江汉路",
-            "武汉天地",
-            "光谷",
-            "剧场",
-            "livehouse",
-            "演出",
-            "脱口秀",
-            "展览",
-            "美术馆",
-            "艺术馆",
-            "博物馆"
-        )
+        private val longPlaySignals = WuhanKnowledgeConfig.longPlaySignals
     }
 }

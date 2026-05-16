@@ -1,10 +1,10 @@
 package com.example.dateapp.ui.decision
 
 import android.os.SystemClock
+import com.example.dateapp.data.WuhanKnowledgeConfig
 import com.example.dateapp.data.environment.DecisionEnvironmentRepository
 import com.example.dateapp.data.environment.DecisionEnvironmentSnapshot
 import kotlinx.coroutines.withTimeoutOrNull
-import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
@@ -90,7 +90,7 @@ class DecisionEnvironmentCache(
     }
 
     companion object {
-        private val appZoneId = ZoneId.of("Asia/Shanghai")
+        private val appZoneId = WuhanKnowledgeConfig.zoneId
         private val fullTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
     }
 }

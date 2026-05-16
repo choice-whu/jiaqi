@@ -1,5 +1,6 @@
 package com.example.dateapp.data.decision
 
+import com.example.dateapp.data.WuhanKnowledgeConfig
 import com.example.dateapp.data.place.PlaceConfidence
 import com.example.dateapp.data.place.PlaceResolver
 import com.example.dateapp.data.place.ResolvedPlace
@@ -70,7 +71,8 @@ class DecisionCandidateScorer(
         recommendation: AiDecisionRecommendation,
         resolvedPlace: ResolvedPlace,
         category: String,
-        profile: RecommendationPreferenceProfile?
+        profile: RecommendationPreferenceProfile?,
+        poiTypeHint: String? = null
     ): PersonalizationScoreBreakdown {
         if (profile == null) {
             return PersonalizationScoreBreakdown(score = 0, traits = emptySet(), eventCount = 0)
@@ -81,6 +83,10 @@ class DecisionCandidateScorer(
             append(resolvedPlace.displayName)
             append(' ')
             append(resolvedPlace.routeKeyword)
+            if (!poiTypeHint.isNullOrBlank()) {
+                append(' ')
+                append(poiTypeHint)
+            }
         }
         val traits = RecommendationTraitAnalyzer.extractTraits(
             text = text,
@@ -122,20 +128,7 @@ class DecisionCandidateScorer(
             append(resolvedPlace.source)
         }.lowercase(Locale.ROOT)
 
-        val specialtySnackScore = if (listOf(
-                "锅盔",
-                "馄饨",
-                "羊肉粉",
-                "牛肉粉",
-                "牛肉面",
-                "水煎包",
-                "烧鸭",
-                "鱼鲜",
-                "小吃",
-                "热干面",
-                "豆皮"
-            ).any(text::contains)
-        ) {
+        val specialtySnackScore = if (WuhanKnowledgeConfig.specialtySnacks.any(text::contains)) {
             2
         } else {
             0
@@ -143,17 +136,7 @@ class DecisionCandidateScorer(
 
         return when {
             text.contains("huda_mixc") -> 8 + specialtySnackScore
-            listOf(
-                "湖北大学",
-                "湖大",
-                "武昌万象城",
-                "万象城",
-                "群星城",
-                "徐东",
-                "水岸星城",
-                "团结大道",
-                "沙湖"
-            ).any(text::contains) -> 4 + specialtySnackScore
+            WuhanKnowledgeConfig.hubuCoreAreas.any(text::contains) -> 4 + specialtySnackScore
             else -> specialtySnackScore
         }
     }
@@ -173,7 +156,7 @@ class DecisionCandidateScorer(
                 typeText.contains("火锅") || typeText.contains("烧烤") -> 2
                 typeText.contains("餐饮服务") -> 1
                 else -> 0
-            } + if (listOf("万象城", "群星城", "湖大", "湖北大学").any(nameText::contains)) 1 else 0
+            } + if ((WuhanKnowledgeConfig.mallKeywords + WuhanKnowledgeConfig.hubuCoreAreas.take(2)).any(nameText::contains)) 1 else 0
         }
 
         return 0
@@ -319,47 +302,8 @@ class DecisionCandidateScorer(
         request: DecisionEngineRequest
     ): Int {
         val distance = resolvedPlace.directDistanceMeters ?: return 0
-        val transitFriendly = containsAny(
-            text,
-            "地铁",
-            "metro",
-            "2号线",
-            "4号线",
-            "7号线",
-            "8号线",
-            "公交",
-            "车站",
-            "街道口",
-            "广埠屯",
-            "珞喻路",
-            "珞珈",
-            "武汉大学",
-            "武大",
-            "湖北大学",
-            "湖大",
-            "徐东",
-            "沙湖",
-            "楚河汉街",
-            "汉街",
-            "光谷",
-            "武昌万象城",
-            "群光",
-            "银泰创意城",
-            "凯德1818",
-            "武汉天地"
-        )
-        val remoteSignal = containsAny(
-            text,
-            "黄陂",
-            "新洲",
-            "蔡甸",
-            "汉南",
-            "郊野",
-            "农庄",
-            "度假村",
-            "山庄",
-            "村"
-        )
+        val transitFriendly = containsAny(text, *WuhanKnowledgeConfig.transitKeywords.toTypedArray())
+        val remoteSignal = WuhanKnowledgeConfig.isRemoteDistrict(text)
         val weekendLongTrip = request.environment.currentTime.dayOfWeek.value >= 6 &&
             category == "play" &&
             placePolicy.isTripWorthyPlayDestination(resolvedPlace)
@@ -454,9 +398,9 @@ class DecisionCandidateScorer(
         text: String
     ): Int {
         val coreAreaScore = when {
-            containsAny(text, "街道口", "广埠屯", "珞珈", "珞喻路", "武大", "武汉大学") -> 5
-            containsAny(text, "湖大", "湖北大学", "徐东", "沙湖", "武昌万象城", "群星城", "团结大道") -> 5
-            containsAny(text, "楚河汉街", "汉街", "中南路", "洪山广场", "光谷") -> 3
+            WuhanKnowledgeConfig.whuCoreAreas.any(text::contains) -> 5
+            WuhanKnowledgeConfig.hubuCoreAreas.any(text::contains) -> 5
+            WuhanKnowledgeConfig.cityCoreAreas.any(text::contains) -> 3
             else -> 0
         }
         val hiddenGemScore = if (containsAny(text, "私房", "小馆", "主理人", "小店", "地下", "livehouse", "画廊", "工作室")) {
@@ -472,25 +416,11 @@ class DecisionCandidateScorer(
         category: String,
         text: String
     ): Int {
-        val studentFriendly = containsAny(
-            text,
-            "老乡鸡",
-            "尊宝",
-            "袁记",
-            "塔斯汀",
-            "简餐",
-            "小吃",
-            "家常",
-            "砂锅",
-            "牛肉粉",
-            "热干面",
-            "披萨",
-            "云饺"
-        )
-        val luxuryTrap = containsAny(text, "高端", "奢华", "会所", "私宴", "黑珍珠", "人均500", "人均800")
+        val studentFriendly = WuhanKnowledgeConfig.studentFriendlyChains.any(text::contains)
+        val luxuryTrap = WuhanKnowledgeConfig.luxuryTraps.any(text::contains)
         return when {
             luxuryTrap -> -8
-            category == "meal" && studentFriendly -> -2
+            category == "meal" && studentFriendly -> 1
             studentFriendly -> 2
             else -> 0
         }
@@ -631,8 +561,8 @@ class DecisionCandidateScorer(
         if (containsAny("宵夜", "烧烤", "火锅")) {
             score += when (hour) {
                 in 17..23, in 0..1 -> 2
-                in 11..13 -> 1
-                else -> -1
+                in 11..16 -> 1
+                else -> 0
             }
         }
 

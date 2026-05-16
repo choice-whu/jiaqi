@@ -3,6 +3,7 @@ package com.example.dateapp.data.decision
 import android.util.Log
 import com.example.dateapp.data.AiPoiChoice
 import com.example.dateapp.data.AiRepository
+import com.example.dateapp.data.WuhanKnowledgeConfig
 import com.example.dateapp.data.environment.DecisionEnvironmentSnapshot
 import com.example.dateapp.data.place.PlaceConfidence
 import com.example.dateapp.data.place.PlaceResolver
@@ -35,7 +36,8 @@ data class DecisionEngineResult(
     val weatherProfile: DecisionWeatherProfile,
     val candidateCount: Int,
     val attemptIndex: Int,
-    val rankedCandidates: List<DecisionEngineCandidate>
+    val rankedCandidates: List<DecisionEngineCandidate>,
+    val unresolvableNames: List<String> = emptyList()
 )
 
 data class DecisionEngineCandidate(
@@ -66,187 +68,61 @@ class DecisionEngine(
     suspend fun generateAiDecision(request: DecisionEngineRequest): Result<DecisionEngineResult> {
         return runCatching {
             val weatherProfile = buildWeatherProfile(request.environment)
-            var lastFailureReason = "AI recommendation failed validation"
-            var dynamicAvoidNames = request.avoidNames
-            var totalCandidates = 0
+            val avoidNames = (request.avoidNames + request.hardAvoidNames).distinct()
             val startedAtMillis = System.currentTimeMillis()
-
-            for (attempt in AI_FAST_ATTEMPT_INDICES) {
-                val aiFirstTimeoutMillis = if (request.useCandidateBatch) {
-                    AI_FIRST_BACKGROUND_TIMEOUT_MS
-                } else {
-                    AI_FIRST_FAST_TIMEOUT_MS
-                }
-
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_ATTEMPT index=${attempt + 1} mode=AI_FIRST timeout=${aiFirstTimeoutMillis}ms targetCategory=${request.targetCategory} weather=${weatherProfile.label} avoid=${dynamicAvoidNames.size}"
-                )
-
-                val aiFirstResult = withTimeoutOrNull(aiFirstTimeoutMillis) {
-                    requestAiFirstCandidateScores(
-                        request = request,
-                        avoidNames = dynamicAvoidNames,
-                        weatherProfile = weatherProfile,
-                        attemptIndex = attempt
-                    )
-                }
-
-                if (aiFirstResult == null) {
-                    lastFailureReason = "AI-first decision timed out after ${aiFirstTimeoutMillis}ms"
-                    Log.d(TAG, "decision source=ENGINE_AI_FIRST_TIMEOUT timeout=${aiFirstTimeoutMillis}ms")
-                    break
-                } else {
-                    val aiFirstThrowable = aiFirstResult.exceptionOrNull()
-                    if (aiFirstThrowable != null) {
-                        lastFailureReason = aiFirstThrowable.message ?: aiFirstThrowable.javaClass.simpleName
-                        Log.d(TAG, "decision source=ENGINE_AI_FIRST_FAILED reason=$lastFailureReason")
-                        if (
-                            aiFirstThrowable is AiCandidateValidationException &&
-                            attempt < AI_FAST_ATTEMPT_INDICES.last
-                        ) {
-                            dynamicAvoidNames = (dynamicAvoidNames + aiFirstThrowable.candidateNames)
-                                .distinct()
-                                .takeLast(AVOID_MEMORY_LIMIT)
-                            Log.d(
-                                TAG,
-                                "decision source=ENGINE_AI_FIRST_RETRY avoidAdded=${aiFirstThrowable.candidateNames.joinToString(limit = 4)}"
-                            )
-                            val rescueTimeoutMillis = if (request.useCandidateBatch) {
-                                POI_FIRST_BACKGROUND_TIMEOUT_MS
-                            } else {
-                                POI_FIRST_FAST_TIMEOUT_MS
-                            }
-                            Log.d(
-                                TAG,
-                                "decision source=ENGINE_VERIFIED_RESCUE_START timeout=${rescueTimeoutMillis}ms avoid=${dynamicAvoidNames.size}"
-                            )
-                            val verifiedRescueCandidates = withTimeoutOrNull(rescueTimeoutMillis) {
-                                requestAmapFirstCandidateScores(
-                                    request = request,
-                                    avoidNames = dynamicAvoidNames,
-                                    weatherProfile = weatherProfile
-                                ).getOrElse { rescueThrowable ->
-                                    Log.d(
-                                        TAG,
-                                        "decision source=ENGINE_VERIFIED_RESCUE_FAILED reason=${rescueThrowable.message ?: rescueThrowable.javaClass.simpleName}"
-                                    )
-                                    null
-                                }
-                            }
-                            if (!verifiedRescueCandidates.isNullOrEmpty()) {
-                                totalCandidates += verifiedRescueCandidates.size
-                                val selected = verifiedRescueCandidates.first()
-                                Log.d(
-                                    TAG,
-                                    "decision source=ENGINE_SELECTED attempt=${attempt + 1} mode=AI_VERIFIED_RESCUE name=${selected.recommendation.name} score=${selected.score} confidence=${selected.resolvedPlace.confidence} distance=${selected.resolvedPlace.distanceLabel} candidates=${verifiedRescueCandidates.size} valid=${verifiedRescueCandidates.size}"
-                                )
-                                return@runCatching DecisionEngineResult(
-                                    recommendation = selected.recommendation,
-                                    resolvedPlace = selected.resolvedPlace,
-                                    category = request.targetCategory,
-                                    environment = request.environment,
-                                    weatherProfile = weatherProfile,
-                                    candidateCount = totalCandidates,
-                                    attemptIndex = attempt,
-                                    rankedCandidates = verifiedRescueCandidates.map { candidateScore ->
-                                        DecisionEngineCandidate(
-                                            recommendation = candidateScore.recommendation,
-                                            resolvedPlace = candidateScore.resolvedPlace,
-                                            score = candidateScore.score
-                                        )
-                                    }
-                                )
-                            } else {
-                                Log.d(TAG, "decision source=ENGINE_VERIFIED_RESCUE_EMPTY")
-                            }
-                            continue
-                        }
-                        break
-                    } else {
-                        val aiCandidates = aiFirstResult.getOrThrow()
-                        totalCandidates += aiCandidates.size
-                        if (aiCandidates.isNotEmpty()) {
-                            val selected = aiCandidates.first()
-                            Log.d(
-                                TAG,
-                                "decision source=ENGINE_SELECTED attempt=${attempt + 1} mode=AI_FIRST name=${selected.recommendation.name} score=${selected.score} confidence=${selected.resolvedPlace.confidence} distance=${selected.resolvedPlace.distanceLabel} candidates=${aiCandidates.size} valid=${aiCandidates.size}"
-                            )
-                            return@runCatching DecisionEngineResult(
-                                recommendation = selected.recommendation,
-                                resolvedPlace = selected.resolvedPlace,
-                                category = request.targetCategory,
-                                environment = request.environment,
-                                weatherProfile = weatherProfile,
-                                candidateCount = totalCandidates,
-                                attemptIndex = attempt,
-                                rankedCandidates = aiCandidates.map { candidateScore ->
-                                    DecisionEngineCandidate(
-                                        recommendation = candidateScore.recommendation,
-                                        resolvedPlace = candidateScore.resolvedPlace,
-                                        score = candidateScore.score
-                                    )
-                                }
-                            )
-                        }
-                    }
-                }
-
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_AI_FIRST_ONLY_SKIP_AMAP_RESCUE reason=$lastFailureReason"
-                )
-            }
-
-            error("$lastFailureReason after ${System.currentTimeMillis() - startedAtMillis}ms")
-        }
-    }
-
-    private suspend fun requestAiFirstCandidateScores(
-        request: DecisionEngineRequest,
-        avoidNames: List<String>,
-        weatherProfile: DecisionWeatherProfile,
-        attemptIndex: Int
-    ): Result<List<CandidateScore>> {
-        return runCatching {
-            val promptAvoidNames = (avoidNames + request.hardAvoidNames)
-                .distinct()
-                .takeLast(AI_PROMPT_AVOID_LIMIT)
-            val isRetry = attemptIndex > 0
-            val aiCandidates = listOf(
-                aiRepository.recommendDecision(
-                    environment = request.environment,
-                    targetCategory = request.targetCategory,
-                    strictTimeMatch = true,
-                    avoidNames = promptAvoidNames,
-                    nearbyMallName = request.nearbyMallName,
-                    preferenceProfile = request.preferenceProfile,
-                    recommendationTopic = request.recommendationTopic.takeUnless { isRetry },
-                    fastMode = true,
-                    rescueMode = isRetry
-                ).getOrThrow()
-            )
-
-            require(aiCandidates.isNotEmpty()) {
-                "AI returned no recommendation candidates"
+            val timeoutMillis = if (request.useCandidateBatch) {
+                POI_FIRST_BACKGROUND_TIMEOUT_MS
+            } else {
+                POI_FIRST_FAST_TIMEOUT_MS
             }
 
             Log.d(
                 TAG,
-                "decision source=ENGINE_AI_CANDIDATES count=${aiCandidates.size} names=${aiCandidates.joinToString(limit = 6) { it.name }}"
+                "decision source=ENGINE_AMAP_FIRST timeout=${timeoutMillis}ms targetCategory=${request.targetCategory} weather=${weatherProfile.label} avoid=${avoidNames.size} topic=${request.recommendationTopic?.label}"
             )
 
-            val selectedCandidates = selectCandidateScores(
-                candidates = aiCandidates,
-                request = request,
-                weatherProfile = weatherProfile,
-                avoidNames = avoidNames
-            )
-
-            if (selectedCandidates.isEmpty()) {
-                throw AiCandidateValidationException(aiCandidates.map { it.name })
+            val candidates = withTimeoutOrNull(timeoutMillis) {
+                requestAmapFirstCandidateScores(
+                    request = request,
+                    avoidNames = avoidNames,
+                    weatherProfile = weatherProfile
+                ).getOrElse { throwable ->
+                    Log.d(
+                        TAG,
+                        "decision source=ENGINE_AMAP_FAILED reason=${throwable.message ?: throwable.javaClass.simpleName}"
+                    )
+                    null
+                }
             }
-            selectedCandidates
+
+            if (candidates == null) {
+                error("AMap POI search timed out after ${timeoutMillis}ms")
+            }
+            require(candidates.isNotEmpty()) {
+                "AMap returned no usable POI candidates after filtering"
+            }
+
+            val selected = candidates.first()
+            Log.d(
+                TAG,
+                "decision source=ENGINE_SELECTED mode=AMAP_FIRST name=${selected.recommendation.name} score=${selected.score} confidence=${selected.resolvedPlace.confidence} distance=${selected.resolvedPlace.distanceLabel} candidates=${candidates.size}"
+            )
+            DecisionEngineResult(
+                recommendation = selected.recommendation,
+                resolvedPlace = selected.resolvedPlace,
+                category = request.targetCategory,
+                environment = request.environment,
+                weatherProfile = weatherProfile,
+                candidateCount = candidates.size,
+                attemptIndex = 0,
+                rankedCandidates = candidates.map { candidateScore ->
+                    DecisionEngineCandidate(
+                        recommendation = candidateScore.recommendation,
+                        resolvedPlace = candidateScore.resolvedPlace,
+                        score = candidateScore.score
+                    )
+                }
+            )
         }
     }
 
@@ -396,10 +272,6 @@ class DecisionEngine(
             return false
         }
         return true
-    }
-
-    private fun isTripWorthyLongPlay(candidate: CandidateScore): Boolean {
-        return placePolicy.isTripWorthyLongPlay(candidate.recommendation, candidate.resolvedPlace)
     }
 
     private fun isFrontPlayDistanceAllowed(candidate: CandidateScore): Boolean {
@@ -689,7 +561,8 @@ class DecisionEngine(
         val personalScore = personalizationScore(
             recommendation = recommendation,
             resolvedPlace = resolvedPlace,
-            request = request
+            request = request,
+            poiTypeHint = poi.typeDescription
         )
         if (personalScore <= PERSONALIZATION_REJECTION_THRESHOLD) {
             Log.d(
@@ -796,221 +669,18 @@ class DecisionEngine(
         )
     }
 
-    private suspend fun selectCandidateScores(
-        candidates: List<AiDecisionRecommendation>,
-        request: DecisionEngineRequest,
-        weatherProfile: DecisionWeatherProfile,
-        avoidNames: List<String>
-    ): List<CandidateScore> {
-        val validCandidates = mutableListOf<CandidateScore>()
-        val hour = request.environment.currentTime.hour
-
-        for (candidate in candidates.distinctBy { normalizePlaceName(it.name) }) {
-            if (isInvalidRecommendationName(candidate, request.targetCategory)) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_INVALID_NAME_SKIP targetCategory=${request.targetCategory} name=${candidate.name}"
-                )
-                continue
-            }
-
-            val isCurrentCardRepeat = request.currentCardName?.let { currentName ->
-                isSimilarPlaceName(candidate.name, currentName)
-            } ?: false
-            val isDislikedRepeat = isRecentlyRecommended(candidate.name, request.hardAvoidNames)
-            val isSoftRepeat = isRecentlyRecommended(candidate.name, avoidNames)
-            if (isDislikedRepeat) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_DISLIKED_HARD_SKIP targetCategory=${request.targetCategory} name=${candidate.name}"
-                )
-                continue
-            }
-            if (isSoftRepeat) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_REPEAT_HARD_SKIP targetCategory=${request.targetCategory} name=${candidate.name}"
-                )
-                continue
-            }
-            if (request.useCandidateBatch && isCurrentCardRepeat) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_BATCH_REPEAT_SKIP targetCategory=${request.targetCategory} name=${candidate.name}"
-                )
-                continue
-            }
-            val repeatPenalty = if (isDislikedRepeat) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_DISLIKED_SOFT_PENALTY targetCategory=${request.targetCategory} name=${candidate.name}"
-                )
-                DISLIKED_REPEAT_PENALTY
-            } else if (isCurrentCardRepeat) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_CURRENT_CARD_SOFT_PENALTY targetCategory=${request.targetCategory} name=${candidate.name}"
-                )
-                CURRENT_CARD_REPEAT_PENALTY
-            } else if (isSoftRepeat) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_REPEAT_SOFT_PENALTY targetCategory=${request.targetCategory} name=${candidate.name}"
-                )
-                SOFT_REPEAT_PENALTY
-            } else {
-                0
-            }
-
-            val timeScore = recommendationTimeSuitability(
-                recommendation = candidate,
-                category = request.targetCategory,
-                hour = hour
-            )
-            if (timeScore < 0) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_TIME_MISMATCH time=${request.environment.currentTimeLabel} targetCategory=${request.targetCategory} name=${candidate.name}"
-                )
-                continue
-            }
-
-            val weatherScore = recommendationWeatherSuitability(
-                recommendation = candidate,
-                category = request.targetCategory,
-                weatherProfile = weatherProfile
-            )
-            val weatherRiskActive = weatherProfile.isSevere ||
-                weatherProfile.isRainy ||
-                weatherProfile.isHot ||
-                weatherProfile.isCold
-            val weatherMismatch = weatherScore < -1 ||
-                (weatherRiskActive && request.targetCategory == "play" && weatherScore < 0)
-            if (weatherMismatch) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_WEATHER_MISMATCH weather=${weatherProfile.label} score=$weatherScore targetCategory=${request.targetCategory} name=${candidate.name}"
-                )
-                continue
-            }
-
-            val placeResolutionTimeoutMillis = if (request.useCandidateBatch) {
-                AI_PLACE_RESOLUTION_BACKGROUND_TIMEOUT_MS
-            } else {
-                AI_PLACE_RESOLUTION_FAST_TIMEOUT_MS
-            }
-            val resolvedPlace = placeResolver.resolveAiRecommendation(
-                recommendation = candidate,
-                category = request.targetCategory,
-                environment = request.environment,
-                timeoutMillis = placeResolutionTimeoutMillis
-            )
-            if (resolvedPlace.isOpenNow == false) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_CLOSED_SKIP targetCategory=${request.targetCategory} name=${candidate.name} hours=${resolvedPlace.openingHours.orEmpty()}"
-                )
-                continue
-            }
-            if (isLikelyClosedDayOnlyVenue(request.targetCategory, candidate, resolvedPlace, hour)) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_DAY_VENUE_UNKNOWN_SKIP targetCategory=${request.targetCategory} name=${candidate.name} hour=$hour"
-                )
-                continue
-            }
-            if (!isDistanceAcceptable(candidate, request.targetCategory, resolvedPlace)) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_DISTANCE_MISMATCH targetCategory=${request.targetCategory} name=${candidate.name} aiDistance=${candidate.distanceDescription} resolvedDistance=${resolvedPlace.directDistanceMeters} confidence=${resolvedPlace.confidence}"
-                )
-                continue
-            }
-            if (
-                (resolvedPlace.latitude == null || resolvedPlace.longitude == null)
-            ) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_PLACE_UNRESOLVED targetCategory=${request.targetCategory} name=${candidate.name}"
-                )
-                continue
-            }
-            if (isPlayDistanceImplausible(request.targetCategory, candidate, resolvedPlace)) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_PLAY_DISTANCE_MISMATCH targetCategory=${request.targetCategory} name=${candidate.name} aiDistance=${candidate.distanceDescription} resolvedDistance=${resolvedPlace.directDistanceMeters}"
-                )
-                continue
-            }
-
-            val personalScore = personalizationScore(
-                recommendation = candidate,
-                resolvedPlace = resolvedPlace,
-                request = request
-            )
-            if (personalScore <= PERSONALIZATION_REJECTION_THRESHOLD) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_PERSONAL_REJECT targetCategory=${request.targetCategory} name=${candidate.name} score=$personalScore"
-                )
-                continue
-            }
-
-            val baseScore = buildCandidateScore(
-                timeScore = timeScore,
-                weatherScore = weatherScore,
-                resolvedPlace = resolvedPlace,
-                category = request.targetCategory
-            )
-            val areaScore = diningAreaPreferenceScore(
-                category = request.targetCategory,
-                resolvedPlace = resolvedPlace
-            )
-            val dateAppealScore = dateAppealScore(
-                category = request.targetCategory,
-                recommendation = candidate,
-                resolvedPlace = resolvedPlace
-            )
-            val studentCoupleScore = studentCoupleProfileScore(
-                category = request.targetCategory,
-                recommendation = candidate,
-                resolvedPlace = resolvedPlace,
-                request = request
-            )
-            if (studentCoupleScore <= STUDENT_COUPLE_REJECTION_THRESHOLD) {
-                Log.d(
-                    TAG,
-                    "decision source=ENGINE_STUDENT_PROFILE_REJECT targetCategory=${request.targetCategory} name=${candidate.name} score=$studentCoupleScore distance=${resolvedPlace.directDistanceMeters}"
-                )
-                continue
-            }
-            val finalScore = baseScore + personalScore + areaScore + dateAppealScore + studentCoupleScore - repeatPenalty
-            Log.d(
-                TAG,
-                "decision source=ENGINE_SCORE targetCategory=${request.targetCategory} name=${candidate.name} base=$baseScore time=$timeScore weather=$weatherScore personal=$personalScore area=$areaScore appeal=$dateAppealScore student=$studentCoupleScore repeatPenalty=$repeatPenalty final=$finalScore distance=${resolvedPlace.directDistanceMeters} source=${resolvedPlace.source}"
-            )
-
-            validCandidates += CandidateScore(
-                recommendation = candidate,
-                resolvedPlace = resolvedPlace,
-                score = finalScore
-            )
-
-        }
-
-        return validCandidates.sortedByDescending { it.score }
-    }
-
     private fun personalizationScore(
         recommendation: AiDecisionRecommendation,
         resolvedPlace: ResolvedPlace,
-        request: DecisionEngineRequest
+        request: DecisionEngineRequest,
+        poiTypeHint: String? = null
     ): Int {
         val score = candidateScorer.personalizationScore(
             recommendation = recommendation,
             resolvedPlace = resolvedPlace,
             category = request.targetCategory,
-            profile = request.preferenceProfile
+            profile = request.preferenceProfile,
+            poiTypeHint = poiTypeHint
         )
         if (score.score != 0) {
             Log.d(
@@ -1092,18 +762,7 @@ class DecisionEngine(
         }
 
         if (category == "play") {
-            val obviousDefaultSignals = listOf(
-                "昙华林",
-                "湖北省博物馆",
-                "省博物馆",
-                "湖北省科技馆",
-                "东湖",
-                "东湖绿道",
-                "武汉大学万林",
-                "万林艺术博物馆",
-                "西西弗书店",
-                "卓尔书店"
-            ).any(normalizedName::contains)
+            val obviousDefaultSignals = WuhanKnowledgeConfig.aiAvoidDefaultSignals.any(normalizedName::contains)
             if (obviousDefaultSignals) {
                 return true
             }
@@ -1245,18 +904,6 @@ class DecisionEngine(
             resolvedDistance <= PlaceResolver.MEAL_MAX_DIRECT_DISTANCE_METERS
     }
 
-    private fun isPlayDistanceImplausible(
-        category: String,
-        recommendation: AiDecisionRecommendation,
-        resolvedPlace: ResolvedPlace
-    ): Boolean {
-        if (category != "play") {
-            return false
-        }
-        val describedDistance = placeResolver.parseDistanceMeters(recommendation.distanceDescription)
-        return placePolicy.isPlayDistanceImplausible(recommendation, resolvedPlace, describedDistance)
-    }
-
     private fun isLikelyClosedDayOnlyVenue(
         category: String,
         recommendation: AiDecisionRecommendation,
@@ -1264,17 +911,6 @@ class DecisionEngine(
         hour: Int
     ): Boolean {
         return placePolicy.isLikelyClosedDayOnlyVenue(category, recommendation, resolvedPlace, hour)
-    }
-
-    private fun isTripWorthyPlayDestination(resolvedPlace: ResolvedPlace): Boolean {
-        return placePolicy.isTripWorthyPlayDestination(resolvedPlace)
-    }
-
-    private fun isSpecialExperiencePlayDestination(
-        recommendation: AiDecisionRecommendation,
-        resolvedPlace: ResolvedPlace
-    ): Boolean {
-        return placePolicy.isSpecialExperiencePlayDestination(recommendation, resolvedPlace)
     }
 
     private fun recommendationTimeSuitability(
@@ -1307,14 +943,6 @@ class DecisionEngine(
         return DecisionNameMatcher.isSimilarPlaceName(first, second)
     }
 
-    private fun normalizePlaceName(name: String): String {
-        return DecisionNameMatcher.normalizePlaceName(name)
-    }
-
-    private fun recommendationSignalText(recommendation: AiDecisionRecommendation): String {
-        return placePolicy.recommendationSignalText(recommendation)
-    }
-
     private data class CandidateScore(
         val recommendation: AiDecisionRecommendation,
         val resolvedPlace: ResolvedPlace,
@@ -1322,24 +950,8 @@ class DecisionEngine(
         val score: Int
     )
 
-    private class AiCandidateValidationException(
-        val candidateNames: List<String>
-    ) : IllegalStateException(
-        "AI returned no validated candidates: ${candidateNames.joinToString(limit = 4)}"
-    )
-
-    private enum class AiRecommendationAttemptMode {
-        QUICK_SINGLE
-    }
-
     companion object {
         private const val TAG = "DecisionEngine"
-        private val AI_FAST_ATTEMPT_INDICES = 0..1
-        private const val AI_FIRST_FAST_TIMEOUT_MS = 8_000L
-        private const val AI_FIRST_BACKGROUND_TIMEOUT_MS = 18_000L
-        private const val AI_FIRST_FRONT_CANDIDATE_LIMIT = 4
-        private const val AI_FIRST_BACKGROUND_CANDIDATE_LIMIT = 2
-        private const val AI_PROMPT_AVOID_LIMIT = 6
         private const val POI_FIRST_FAST_TIMEOUT_MS = 9_000L
         private const val POI_FIRST_BACKGROUND_TIMEOUT_MS = 15_000L
         private const val AI_POLISH_TIMEOUT_MS = 1_500L
@@ -1349,23 +961,14 @@ class DecisionEngine(
         private const val AI_CHOICE_BACKGROUND_CANDIDATE_LIMIT = 6
         private const val AI_CHOICE_BONUS = 8
         private const val AI_CHOICE_MAX_LOCAL_SCORE_GAP = 8
-        private const val AI_PLACE_RESOLUTION_FAST_TIMEOUT_MS = 3_500L
-        private const val AI_PLACE_RESOLUTION_BACKGROUND_TIMEOUT_MS = 5_000L
         private const val FRONT_AI_POLISH_LIMIT = 0
         private const val BACKGROUND_AI_POLISH_LIMIT = 2
         private const val BACKGROUND_CANDIDATE_LIMIT = 2
         private const val FRONT_CANDIDATE_LIMIT = 5
         private const val FRONT_MIN_DISPLAY_SCORE = 12
-        private const val AI_RESCUE_AVOID_LIMIT = 6
-        private const val AVOID_MEMORY_LIMIT = 100
         private const val SOFT_REPEAT_PENALTY = 5
         private const val CURRENT_CARD_REPEAT_PENALTY = 8
-        private const val DISLIKED_REPEAT_PENALTY = 10
         private const val PERSONALIZATION_REJECTION_THRESHOLD = -8
         private const val STUDENT_COUPLE_REJECTION_THRESHOLD = -11
-
-        private fun aiRecommendationAttemptMode(@Suppress("UNUSED_PARAMETER") attemptIndex: Int): AiRecommendationAttemptMode {
-            return AiRecommendationAttemptMode.QUICK_SINGLE
-        }
     }
 }

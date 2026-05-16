@@ -1,6 +1,7 @@
 package com.example.dateapp.data.route
 
 import com.amap.api.services.core.PoiItem
+import com.example.dateapp.data.WuhanKnowledgeConfig
 import java.util.Locale
 
 data class LandmarkCoordinate(
@@ -204,16 +205,8 @@ object RoutePlaceCatalog {
         "购物中心",
         "商场",
         "商业中心",
-        "mall",
-        "万象城",
-        "梦时代",
-        "k11",
-        "凯德",
-        "群光",
-        "银泰",
-        "龙湖天街",
-        "万达"
-    )
+        "mall"
+    ) + WuhanKnowledgeConfig.mallKeywords
 
     private val mallGenericKeywords = listOf(
         "百货",
@@ -845,16 +838,8 @@ object RoutePlaceCatalog {
         "购物中心",
         "商业中心",
         "百货",
-        "mall",
-        "k11",
-        "万象城",
-        "梦时代",
-        "凯德",
-        "群光",
-        "银泰",
-        "龙湖天街",
-        "万达"
-    )
+        "mall"
+    ) + WuhanKnowledgeConfig.mallKeywords
 
     private val mallPlayPoiKeywords = listOf(
         "购物中心",

@@ -12,6 +12,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
 import com.example.dateapp.data.location.LocationHelper
+import com.example.dateapp.data.WuhanKnowledgeConfig
 import com.example.dateapp.data.remote.WeatherApiService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -20,7 +21,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -525,13 +525,13 @@ class DecisionEnvironmentRepository(
         private const val weatherCacheTtlMillis = 45 * 60 * 1000L
 
         private val timeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
-        private val wuhanZone = ZoneId.of("Asia/Shanghai")
+        private val wuhanZone = WuhanKnowledgeConfig.zoneId
         private const val currentLocationLabel = "\u5f53\u524d\u4f4d\u7f6e\u9644\u8fd1"
 
         private val fallbackLocation = LocationSnapshot(
-            label = "\u6b66\u5927\u4e0e\u6e56\u5927\u4e4b\u95f4",
-            latitude = 30.5609,
-            longitude = 114.3552,
+            label = WuhanKnowledgeConfig.EMERGENCY_LABEL,
+            latitude = WuhanKnowledgeConfig.EMERGENCY_LAT,
+            longitude = WuhanKnowledgeConfig.EMERGENCY_LNG,
             source = "wuda_huda_midpoint_fallback"
         )
     }

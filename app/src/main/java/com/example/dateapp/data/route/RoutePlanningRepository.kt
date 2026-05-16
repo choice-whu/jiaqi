@@ -15,6 +15,7 @@ import com.amap.api.services.geocoder.RegeocodeResult
 import com.amap.api.services.poisearch.PoiResult
 import com.amap.api.services.poisearch.PoiSearch
 import com.example.dateapp.BuildConfig
+import com.example.dateapp.data.WuhanKnowledgeConfig
 import com.example.dateapp.data.environment.DecisionEnvironmentRepository
 import com.example.dateapp.data.environment.UserLocationSnapshot
 import kotlinx.coroutines.delay
@@ -660,46 +661,46 @@ class RoutePlanningRepository(
         topicLabel: String?
     ): List<String> {
         val topicQueries = when (topicId) {
-            "craft_workshop" -> listOf("DIY手作", "手工DIY", "手作体验")
-            "pottery_diy" -> listOf("陶艺DIY", "陶艺手作", "拉坯体验")
-            "tufting_diy" -> listOf("tufting", "簇绒DIY", "地毯DIY")
-            "silver_fragrance_diy" -> listOf("银饰DIY", "香薰DIY", "调香体验")
-            "baking_diy" -> listOf("烘焙DIY", "蛋糕DIY", "甜品DIY")
-            "immersive_theater" -> listOf("沉浸式剧场", "小剧场", "话剧")
-            "talkshow_small_theater" -> listOf("脱口秀", "小剧场", "喜剧")
-            "pet_cafe" -> listOf("猫咖", "狗咖", "宠物咖啡")
-            "indoor_sport" -> listOf("射箭馆", "攀岩馆", "保龄球", "滑冰场", "VR体验")
-            "retro_arcade" -> listOf("电玩城", "街机", "VR体验")
-            "boardgame_escape" -> listOf("桌游", "密室逃脱", "剧本杀")
-            "art_exhibition" -> listOf("艺术展", "美术馆", "艺术空间")
-            "small_gallery" -> listOf("画廊", "艺术空间", "展览馆")
-            "vintage_photo" -> listOf("写真馆", "自拍馆", "大头贴", "证件照写真", "胶片写真", "照相馆")
-            "vintage_record_shop" -> listOf("唱片店", "黑胶", "中古店")
-            "toy_blindbox_shop" -> listOf("潮玩", "盲盒", "玩具店")
-            "lifestyle_boutique" -> listOf("生活方式集合店", "买手店", "主理人店", "香水体验", "植物店", "文创小店")
-            "creative_block_shop" -> listOf("创意园", "文创店", "艺术空间")
-            "city_viewpoint" -> listOf("观景台", "城市阳台", "黄鹤楼", "江滩观景")
-            "riverside_walk" -> listOf("江滩", "码头", "江边")
-            "lakeside_walk" -> listOf("湖边", "绿道", "栈道")
-            "historic_architecture" -> listOf("历史街区", "老租界", "近代建筑", "文创街区")
-            "small_park_corner" -> listOf("公园", "游园", "花园")
-            "garden_plants" -> listOf("花市", "植物园", "花园", "植物店")
-            "old_street_corner" -> listOf("老街", "历史街区", "文创街区")
-            "public_art" -> listOf("公共艺术", "雕塑", "艺术装置")
-            "non_hot_museum" -> listOf("博物馆", "纪念馆", "展馆")
-            "temple_heritage" -> listOf("寺庙", "古迹", "教堂")
-            "foreign_food" -> listOf("泰餐", "越南粉", "东南亚菜", "墨西哥菜")
-            "japanese_korean" -> listOf("日料", "寿司", "日式拉面", "韩餐", "韩式烤肉")
-            "western_brunch" -> listOf("西餐", "brunch", "汉堡", "披萨")
-            "bistro_bar" -> listOf("bistro", "小酒馆", "精酿餐吧")
-            "hotpot_bbq" -> listOf("火锅", "烤肉", "烧烤")
-            "dessert_coffee" -> listOf("咖啡", "甜品", "面包", "茶饮")
-            "local_snack" -> listOf("热干面", "豆皮", "汤包", "牛肉粉")
-            "snack_street" -> listOf("小吃", "小吃店", "特色小吃")
-            "late_supper" -> listOf("宵夜", "烧烤", "砂锅")
-            "claypot_homecooking" -> listOf("砂锅", "私房菜", "家常菜")
-            "student_friendly_chain" -> listOf("老乡鸡", "尊宝比萨", "袁记云饺", "塔斯汀", "简餐")
-            "light_food" -> listOf("轻食", "茶馆", "新中式茶饮")
+            "craft_workshop" -> listOf("DIY手作", "手工DIY", "手作体验", "银饰DIY", "陶艺体验")
+            "pottery_diy" -> listOf("陶艺DIY", "陶艺手作", "拉坯体验", "陶吧")
+            "tufting_diy" -> listOf("tufting", "簇绒DIY", "地毯DIY", "毛线")
+            "silver_fragrance_diy" -> listOf("银饰DIY", "香薰DIY", "调香体验", "香水DIY")
+            "baking_diy" -> listOf("烘焙DIY", "蛋糕DIY", "甜品DIY", "烘焙体验")
+            "immersive_theater" -> listOf("沉浸式剧场", "小剧场", "话剧", "即兴喜剧")
+            "talkshow_small_theater" -> listOf("脱口秀", "小剧场", "喜剧", "开放麦")
+            "pet_cafe" -> listOf("猫咖", "狗咖", "宠物咖啡", "撸猫", "柴犬", "异宠")
+            "indoor_sport" -> listOf("射箭馆", "攀岩馆", "保龄球", "滑冰场", "VR体验", "室内运动")
+            "retro_arcade" -> listOf("电玩城", "街机", "VR体验", "主机游戏", "游戏厅")
+            "boardgame_escape" -> listOf("桌游", "密室逃脱", "剧本杀", "血染钟楼")
+            "art_exhibition" -> listOf("艺术展", "美术展", "当代艺术", "艺术馆")
+            "small_gallery" -> listOf("画廊", "独立展览", "艺术空间", "小众展")
+            "vintage_photo" -> listOf("写真馆", "自拍馆", "大头贴", "胶片写真", "照相馆", "证件照")
+            "vintage_record_shop" -> listOf("唱片店", "黑胶", "中古店", "古着店")
+            "toy_blindbox_shop" -> listOf("潮玩", "盲盒", "玩具店", "模玩", "一番赏")
+            "lifestyle_boutique" -> listOf("买手店", "主理人店", "集合买手店", "生活方式店", "杂货铺", "日用生活")
+            "creative_block_shop" -> listOf("创意园", "文创街区", "文化创意", "创意小店")
+            "city_viewpoint" -> listOf("观景台", "城市阳台", "日落观赏", "夜景", "江边观景")
+            "riverside_walk" -> listOf("江滩", "码头", "江边步道", "中华路", "武昌江滩")
+            "lakeside_walk" -> listOf("湖边栈道", "绿道", "东湖绿道", "沙湖", "凌波门")
+            "historic_architecture" -> listOf("老租界", "近代建筑", "黎黄陂路", "老洋房", "老街")
+            "small_park_corner" -> listOf("公园", "游园", "街心花园", "口袋公园")
+            "garden_plants" -> listOf("花市", "花卉市场", "植物园", "多肉", "花店")
+            "old_street_corner" -> listOf("老街", "里份", "昙华林", "文创小店")
+            "public_art" -> listOf("公共艺术", "雕塑", "艺术装置", "城市艺术", "涂鸦墙")
+            "non_hot_museum" -> listOf("博物馆", "纪念馆", "专题展馆", "校史馆")
+            "temple_heritage" -> listOf("寺庙", "古迹", "教堂", "古德寺", "宝通寺")
+            "foreign_food" -> listOf("泰餐", "越南粉", "东南亚菜", "墨西哥菜", "印度菜", "土耳其菜")
+            "japanese_korean" -> listOf("日料", "寿司", "日式拉面", "韩餐", "韩式烤肉", "居酒屋")
+            "western_brunch" -> listOf("西餐", "brunch", "汉堡", "披萨", "意面")
+            "bistro_bar" -> listOf("bistro", "小酒馆", "精酿餐吧", "清吧", "鸡尾酒吧")
+            "hotpot_bbq" -> listOf("火锅", "烤肉", "烧烤", "串串", "烤鱼")
+            "dessert_coffee" -> listOf("咖啡店", "甜品店", "面包店", "茶饮", "蛋糕")
+            "local_snack" -> listOf("热干面", "豆皮", "汤包", "牛肉粉", "牛肉面", "三鲜豆皮", "重油烧麦")
+            "snack_street" -> listOf("小吃", "小吃店", "特色小吃", "汉味小吃")
+            "late_supper" -> listOf("宵夜", "烧烤", "砂锅", "小龙虾")
+            "claypot_homecooking" -> listOf("砂锅", "私房菜", "家常菜", "小馆子")
+            "student_friendly_chain" -> listOf("老乡鸡", "尊宝比萨", "袁记云饺", "塔斯汀", "简餐", "米线", "麻辣烫")
+            "light_food" -> listOf("轻食", "沙拉", "新中式茶饮", "围炉煮茶", "茶馆")
             else -> emptyList()
         }
 
@@ -1668,7 +1669,7 @@ class RoutePlanningRepository(
 
     companion object {
         private const val TAG = "RoutePlanning"
-        private const val AMAP_CITY = "武汉"
+        private val AMAP_CITY = WuhanKnowledgeConfig.AMAP_CITY
         private const val POI_SEARCH_RADIUS_METERS = 50_000
         private const val POI_PAGE_SIZE = 10
         private const val POI_SEARCH_TIMEOUT_MS = 8_000L
@@ -1692,7 +1693,7 @@ class RoutePlanningRepository(
         private const val AMAP_SEARCH_SOCKET_TIMEOUT_MS = 10_000
         private const val MIN_ROUTE_DISTANCE_KM = 0.08
         private const val PRIMARY_POI_ALIAS_EXTRA_CHARS = 3
-        private val WUHAN_ZONE = ZoneId.of("Asia/Shanghai")
+        private val WUHAN_ZONE = WuhanKnowledgeConfig.zoneId
         private val ARRIVAL_FORMATTER = DateTimeFormatter.ofPattern("HH:mm")
         private val weakPoiMatchSignals = setOf(
             "公园",
@@ -1707,26 +1708,7 @@ class RoutePlanningRepository(
             "散步",
             "打卡"
         )
-        private val genericPoiTitles = setOf(
-            "武汉",
-            "武汉市",
-            "江岸区",
-            "江汉区",
-            "硚口区",
-            "汉阳区",
-            "武昌区",
-            "青山区",
-            "洪山区",
-            "江夏区",
-            "光谷",
-            "街道口",
-            "江汉路",
-            "楚河汉街",
-            "武汉天地",
-            "汉口里",
-            "广埠屯",
-            "中南路"
-        )
+        private val genericPoiTitles = WuhanKnowledgeConfig.genericPoiTitles
         private val genericPoiTypeKeywords = listOf(
             "行政地名",
             "区县级地名",
@@ -1736,15 +1718,15 @@ class RoutePlanningRepository(
             "商圈"
         )
         private val emergencyOrigin = UserLocationSnapshot(
-            label = "武大与湖大之间",
-            latitude = 30.5609,
-            longitude = 114.3552,
+            label = WuhanKnowledgeConfig.EMERGENCY_LABEL,
+            latitude = WuhanKnowledgeConfig.EMERGENCY_LAT,
+            longitude = WuhanKnowledgeConfig.EMERGENCY_LNG,
             source = "route_origin_fallback"
         )
         private val hudaMixcDiningCenter = UserLocationSnapshot(
-            label = "湖北大学-武昌万象城附近",
-            latitude = 30.5760,
-            longitude = 114.3435,
+            label = WuhanKnowledgeConfig.HUDA_MIXC_LABEL,
+            latitude = WuhanKnowledgeConfig.HUDA_MIXC_LAT,
+            longitude = WuhanKnowledgeConfig.HUDA_MIXC_LNG,
             source = "huda_mixc_dining_anchor"
         )
 

@@ -129,4 +129,6 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling:1.9.5")
     debugImplementation("androidx.compose.ui:ui-test-manifest:1.9.5")
+
+    testImplementation("junit:junit:4.13.2")
 }

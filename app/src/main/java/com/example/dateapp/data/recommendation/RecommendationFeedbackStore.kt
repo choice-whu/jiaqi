@@ -1,8 +1,9 @@
 package com.example.dateapp.data.recommendation
 
 import android.content.Context
+import com.example.dateapp.data.WuhanKnowledgeConfig
+import com.example.dateapp.ui.decision.NameTrackerStore
 import java.time.Instant
-import java.time.ZoneId
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -110,7 +111,8 @@ object RecommendationTraitAnalyzer {
             addIf("bookstore", "书店", "书城", "书屋", "西西弗", "卓尔", "德芭")
             addIf("cafe", "咖啡", "coffee", "m stand", "甜品", "奶茶", "茶饮", "下午茶")
             addIf("pet_cafe", "猫咖", "狗咖", "宠物咖", "萌宠", "柯基", "柴犬", "异宠", "兔兔", "荷兰猪")
-            addIf("arcade", "电玩", "游戏厅", "汤姆熊", "arcade", "密室", "桌游", "保龄球", "台球", "vr")
+            addIf("arcade", "电玩", "游戏厅", "汤姆熊", "arcade", "vr", "街机", "主机游戏", "保龄球", "台球", "射箭", "攀岩", "滑冰")
+            addIf("boardgame", "密室", "桌游", "剧本杀", "血染钟楼", "推理馆", "逃脱", "沉浸式剧场")
             addIf("craft", "手作", "陶艺", "工坊", "香薰", "diy", "创意工坊", "tufting", "银饰")
             addIf("photo_studio", "写真", "自拍", "大头贴", "拍立得", "胶片", "照相馆", "摄影馆")
             addIf("small_shop", "小店", "买手", "主理人", "生活方式", "潮玩", "盲盒", "玩具", "唱片", "黑胶", "中古", "文创")
@@ -156,6 +158,7 @@ object RecommendationTraitAnalyzer {
             "cafe" -> "咖啡甜品"
             "pet_cafe" -> "猫咖狗咖"
             "arcade" -> "电玩互动"
+            "boardgame" -> "桌游密室"
             "craft" -> "手作工坊"
             "photo_studio" -> "写真自拍"
             "small_shop" -> "主理人小店"
@@ -200,20 +203,20 @@ object RecommendationTraitAnalyzer {
     }
 }
 
-class RecommendationFeedbackStore(context: Context) {
+class RecommendationFeedbackStore(context: Context) : NameTrackerStore {
 
     private val prefs = context.applicationContext.getSharedPreferences(
         PREFS_NAME,
         Context.MODE_PRIVATE
     )
 
-    fun dislikedNames(): List<String> {
+    override fun dislikedNames(): List<String> {
         return readList(KEY_DISLIKED_NAMES)
             .filter { it.isNotBlank() }
             .takeLast(MAX_DISLIKED_NAMES)
     }
 
-    fun recentRecommendedNames(): List<String> {
+    override fun recentRecommendedNames(): List<String> {
         val cutoff = System.currentTimeMillis() - RECENT_RECOMMENDATION_COOLDOWN_MS
         val recentEvents = readList(KEY_RECENT_RECOMMENDATIONS)
             .mapNotNull(::parseTitleEvent)
@@ -403,7 +406,7 @@ class RecommendationFeedbackStore(context: Context) {
         )
     }
 
-    fun recordRecommended(title: String) {
+    override fun recordRecommended(title: String) {
         val cleanTitle = title.cleanFeedbackText()
         if (cleanTitle.isBlank()) {
             return
@@ -589,7 +592,7 @@ class RecommendationFeedbackStore(context: Context) {
         private const val DAY_MILLIS = 24L * 60L * 60L * 1000L
         private const val POSITIVE_TRAIT_THRESHOLD = 4
         private const val NEGATIVE_TRAIT_THRESHOLD = -4
-        private val APP_ZONE_ID = ZoneId.of("Asia/Shanghai")
+        private val APP_ZONE_ID = WuhanKnowledgeConfig.zoneId
         private val TIME_SLOT_ORDER = listOf("morning", "midday", "afternoon", "evening", "late_night")
     }
 }

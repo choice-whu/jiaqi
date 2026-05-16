@@ -1,5 +1,6 @@
 package com.example.dateapp.data.recommendation
 
+import com.example.dateapp.data.WuhanKnowledgeConfig
 import kotlin.random.Random
 
 data class RecommendationTopic(
@@ -137,9 +138,6 @@ class RecommendationTopicProvider(
             fallbackCategory = topic.category
         ) ?: 0
         weight += profileScore * 2
-        if (profileScore <= STRONG_NEGATIVE_PROFILE_SCORE) {
-            weight /= 4
-        }
 
         if (recentlyUsed) {
             weight /= RECENT_TOPIC_PENALTY_DIVISOR
@@ -159,6 +157,10 @@ class RecommendationTopicProvider(
         }
         if (topic.outdoorSensitive && recentOutdoorTopicCount > 0) {
             weight -= recentOutdoorTopicCount * OUTDOOR_STREAK_PENALTY
+        }
+
+        if (profileScore <= STRONG_NEGATIVE_PROFILE_SCORE) {
+            weight = 0
         }
 
         return weight.coerceIn(MIN_TOPIC_WEIGHT, MAX_TOPIC_WEIGHT)
@@ -309,7 +311,7 @@ class RecommendationTopicProvider(
                 "western_brunch",
                 "claypot_homecooking",
                 "local_snack" -> 5
-                "student_friendly_chain" -> -4
+                "student_friendly_chain" -> 3
                 else -> 1
             }
             in 15..17 -> when (topicId) {
@@ -327,14 +329,14 @@ class RecommendationTopicProvider(
                 "foreign_food",
                 "bistro_bar",
                 "claypot_homecooking" -> 6
-                "student_friendly_chain" -> -3
+                "student_friendly_chain" -> 2
                 else -> 1
             }
             else -> when (topicId) {
                 "late_supper",
                 "hotpot_bbq",
                 "local_snack" -> 6
-                "student_friendly_chain" -> -2
+                "student_friendly_chain" -> 0
                 else -> -3
             }
         }
@@ -384,7 +386,7 @@ class RecommendationTopicProvider(
                 id = "tufting_diy",
                 category = "play",
                 label = "Tufting簇绒",
-                promptHint = "推荐武汉真实簇绒/地毯DIY工作室，店名要具体，适合情侣一起做成品。",
+                promptHint = "推荐${WuhanKnowledgeConfig.CITY}真实簇绒/地毯DIY工作室，店名要具体，适合情侣一起做成品。",
                 baseWeight = 15,
                 traits = setOf("craft")
             ),
@@ -457,7 +459,7 @@ class RecommendationTopicProvider(
                 label = "桌游/密室",
                 promptHint = "推荐桌游店、密室、剧本娱乐或轻推理体验馆，优先适合两个人的小店。",
                 baseWeight = 11,
-                traits = setOf("arcade"),
+                traits = setOf("boardgame"),
                 classicRomance = true,
                 surpriseBox = true
             ),
@@ -668,8 +670,8 @@ class RecommendationTopicProvider(
             RecommendationTopic(
                 id = "local_snack",
                 category = "meal",
-                label = "武汉本地小吃",
-                promptHint = "推荐具体武汉小吃店，如热干面、豆皮、汤包、牛肉粉、烧麦，但要近且真实。",
+                label = "${WuhanKnowledgeConfig.CITY}本地小吃",
+                promptHint = "推荐具体${WuhanKnowledgeConfig.CITY}小吃店，如热干面、豆皮、汤包、牛肉粉、烧麦，但要近且真实。",
                 campusDepth = true
             ),
             RecommendationTopic(
@@ -697,8 +699,10 @@ class RecommendationTopicProvider(
                 id = "student_friendly_chain",
                 category = "meal",
                 label = "学生友好连锁",
-                promptHint = "推荐老乡鸡、尊宝比萨、袁记云饺、塔斯汀等学生友好、真实可达、不容易踩雷的连锁或轻松小店，优先湖大-武昌万象城、徐东、街道口。",
-                baseWeight = 3,
+                promptHint = "推荐老乡鸡、尊宝比萨、袁记云饺、塔斯汀等学生友好、真实可达、不容易踩雷的连锁或轻松小店，优先" +
+                    WuhanKnowledgeConfig.HUBU_SHORT + "-" + WuhanKnowledgeConfig.mallKeywords.first() +
+                    "、徐东、" + WuhanKnowledgeConfig.whuCoreAreas.first() + "。",
+                baseWeight = 8,
                 traits = setOf("student_chain"),
                 campusDepth = true
             ),

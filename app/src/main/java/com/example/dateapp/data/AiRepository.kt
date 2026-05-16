@@ -317,9 +317,9 @@ class AiRepository(
             "{\"display_name\":\"\",\"amap_search_keyword\":\"\",\"distance_desc\":\"\",\"tag\":\"\",\"intro\":\"\"}"
         }
         return if (targetCategory == "play") {
-            "You are a local Wuhan explorer finding niche, real, non-touristy dating spots. Output strictly valid JSON: $schema"
+            "You are a local ${WuhanKnowledgeConfig.CITY} explorer finding niche, real, non-touristy dating spots. Output strictly valid JSON: $schema"
         } else {
-            "You are a local Wuhan food scout finding nearby real restaurants, cafes, desserts, and supper spots. Output strictly valid JSON: $schema"
+            "You are a local ${WuhanKnowledgeConfig.CITY} food scout finding nearby real restaurants, cafes, desserts, and supper spots. Output strictly valid JSON: $schema"
         }
     }
 
@@ -365,7 +365,7 @@ class AiRepository(
         }.joinToString("\n")
 
         return """
-Task: choose the single best real POI for a Wuhan university couple right now.
+Task: choose the single best real POI for a ${WuhanKnowledgeConfig.CITY} university couple right now.
 $studentCoupleProfile
 Category: $categoryLabel
 Time: ${environment.currentTimeLabel}
@@ -384,10 +384,10 @@ Rules:
 - Do not output any new place name.
 - Prefer the candidate that best matches time, weather, distance, topic, and personal preference.
 - If two candidates are similar, pick the fresher and less recently repeated feeling one.
-- Public transport matters a lot. Prefer metro-accessible areas around WHU/HUBU, Jiedaokou, Guangbutun, Xudong, Shahu, Chuhehanjie, Optics Valley, and Wuchang MIXC. Avoid remote suburbs unless it is a genuinely classic long-trip scenic destination.
+- Public transport matters a lot. Prefer metro-accessible areas around WHU/HUBU, Jiedaokou, Guangbutun, Xudong, Shahu, Chuhehanjie, Optics Valley, and Wuchang MIXC. Avoid remote suburbs unless it is a genuinely classic long-trip scenic destination. (City: ${WuhanKnowledgeConfig.CITY})
 - For meals, prefer student-premium: nearby, tasty, relaxed, concrete restaurants. Avoid stiff luxury traps.
 - For play, balance classic romance and surprise: photobooths, cinema/KTV, arcades, scenic walks, niche exhibitions, DIY workshops, pet cafes, pop-up markets, trendy interactive shops, small owner-run stores, or worthwhile scenic spots.
-- If candidate quality is close, prefer hidden gems around WHU/HUBU core circles over generic famous defaults.
+- If candidate quality is close, prefer hidden gems around WHU/HUBU core circles over generic famous defaults. Avoid ${WuhanKnowledgeConfig.aiAvoidDefaultSignals.take(5).joinToString("/")}/etc.
 - tag: 2 to 4 Simplified Chinese characters.
 - intro: 8 to 18 Simplified Chinese characters. Describe this place itself. Do not mention AI, weather, time, location, route, "real/verified", or "date suitable".
 - reason: short internal reason in Chinese, <= 24 characters.
@@ -398,7 +398,7 @@ Return JSON only.
     private fun buildStudentCoupleProfilePrompt(): String {
         return """
 User profile:
-{"identity":"University Student Couple (WHU & HUBU)","vibe":"fun, romantic, curious, surprise-loving","budget":"student-premium; relaxed trendy quality, not stiff luxury","mobility":"subway/bus/cycling; prefer WHU/HUBU, Jiedaokou, Guangbutun, Xudong, Shahu, Chuhehanjie, Optics Valley, Wuchang MIXC","likes":"photobooths, cinema, KTV, arcades, scenic walks, DIY, pet cafes, pop-ups, niche exhibitions, trendy small shops","avoid":"remote suburbs, low-value luxury traps, dull repetitive check-ins"}
+{"identity":"University Student Couple (WHU & HUBU)","vibe":"fun, romantic, curious, surprise-loving","budget":"student-premium; relaxed trendy quality, not stiff luxury","mobility":"subway/bus/cycling; prefer WHU/HUBU, Jiedaokou, Guangbutun, Xudong, Shahu, Chuhehanjie, Optics Valley, Wuchang MIXC","likes":"photobooths, cinema, KTV, arcades, scenic walks, DIY, pet cafes, pop-ups, niche exhibitions, trendy small shops","avoid":"remote suburbs, low-value luxury traps, dull repetitive check-ins","city":"${WuhanKnowledgeConfig.CITY}"}
 """.trimIndent()
     }
 
@@ -464,7 +464,7 @@ $topicHint$preferenceHint
         return "你是一个极度理性的约会推荐引擎。" +
             "当前时间是[${environment.currentTimeLabel}]，" +
             "天气是[${environment.weatherCondition}]，" +
-            "用户位于武汉市[${environment.userLocationLabel} (${String.format(Locale.US, "%.4f", environment.latitude)}, ${String.format(Locale.US, "%.4f", environment.longitude)})]。" +
+            "用户位于${WuhanKnowledgeConfig.CITY_FULL}[${environment.userLocationLabel} (${String.format(Locale.US, "%.4f", environment.latitude)}, ${String.format(Locale.US, "%.4f", environment.longitude)})]。" +
             "请结合当前时段氛围，为情侣推荐唯一一个最适合现在立刻前往的[$categoryLabel]目的地。" +
             "餐饮时段请明显偏向餐厅、咖啡馆、甜品店、小酒馆、烧烤、火锅等真实消费场所；" +
             "非饭点请明显偏向景点、公园、江滩、展览、书店、文创小店、商场里的有趣店铺、散步打卡点、livehouse 等轻松好去处。" +
@@ -579,7 +579,7 @@ Use short natural Chinese for "tag" and "intro". "intro" only describes the plac
         val topicLine = buildUltraCompactTopicLine(recommendationTopic, targetCategory)
         return """
 Return JSON only: {"display_name":"","amap_search_keyword":"","image_url":"","distance_desc":"","tag":"","intro":""}
-You are Jiaqi, a Wuhan date-place picker. Recommend one real specific $categoryLabel place.
+You are Jiaqi, a ${WuhanKnowledgeConfig.CITY} date-place picker. Recommend one real specific $categoryLabel place.
 ${buildCompactCoupleProfileLine()}
 Now: ${environment.currentTimeLabel}; weather=${environment.weatherCondition}; area=${environment.userLocationLabel}; ll=${String.format(Locale.US, "%.3f", environment.latitude)},${String.format(Locale.US, "%.3f", environment.longitude)}.
 $strictLine
@@ -587,7 +587,7 @@ Avoid exact repeats only: $avoidLine.
 $personalizationLine
 $topicLine
 Time: ${buildUltraCompactTimeRule(environment.currentTime.hour, targetCategory)}
-Rules: use an official real AMap-searchable POI name you are confident exists. Never invent generic names like "银饰DIY·湖大店", "手作坊·街道口店", "某某体验馆", "后侧小花园", "后街樱花林". display_name=clean UI name; amap_search_keyword=POI+area. meal=nearby concrete food/drink<=2.5km, no vague district. play=concrete date-worthy non-meal spot: DIY/studio/arcade/pet cafe/photo booth/gallery/lifestyle/vintage/toy/record shop/indie cafe, or one worthwhile scenic/cultural spot. Avoid 昙华林/省博/东湖/万林/ordinary bookstore. If unsure about a niche shop, choose a real known exact POI instead. If mall, exact shop. intro<=14 Chinese chars.
+Rules: use an official real AMap-searchable POI name you are confident exists. Never invent generic names like "银饰DIY·湖大店", "手作坊·街道口店", "某某体验馆", "后侧小花园", "后街樱花林". display_name=clean UI name; amap_search_keyword=POI+area. meal=nearby concrete food/drink<=2.5km, no vague district. play=concrete date-worthy non-meal spot: DIY/studio/arcade/pet cafe/photo booth/gallery/lifestyle/vintage/toy/record shop/indie cafe, or one worthwhile scenic/cultural spot. Avoid ${WuhanKnowledgeConfig.aiAvoidDefaultSignals.joinToString("/")}/ordinary bookstore. If unsure about a niche shop, choose a real known exact POI instead. If mall, exact shop. intro<=14 Chinese chars.
 Location rule: choose near the current coordinates first. Ordinary shops/cafes/arcades/studios should be nearby; only scenic parks, landmarks, riverside/lakeside places, museums/galleries, theaters, or truly special interactive experiences may be farther.
 """.trimIndent()
     }
@@ -610,12 +610,12 @@ Location rule: choose near the current coordinates first. Ordinary shops/cafes/a
 
         return """
 JSON only: {"display_name":"","amap_search_keyword":"","distance_desc":"","tag":"","intro":""}
-Wuhan $categoryLabel now. t=${environment.currentTime.hour} w=${environment.weatherCondition} ll=${String.format(Locale.US, "%.3f", environment.latitude)},${String.format(Locale.US, "%.3f", environment.longitude)}
+${WuhanKnowledgeConfig.CITY} $categoryLabel now. t=${environment.currentTime.hour} w=${environment.weatherCondition} ll=${String.format(Locale.US, "%.3f", environment.latitude)},${String.format(Locale.US, "%.3f", environment.longitude)}
         Do not return these invalid/recent names or aliases: $avoidLine
 $personalizationLine
 $topicLine
 Time: ${buildUltraCompactTimeRule(environment.currentTime.hour, targetCategory)}
-        display_name=clean UI name. amap_search_keyword=core name+area for AMap. meal=nearby food/drink<=2.5km. play=nearby hidden-gem non-food leisure; prefer DIY/pottery/tufting/baking/retro arcade/lifestyle/vintage/record/toy/craft/small gallery before parks/riverside/scenic walks unless outdoor is clearly the best fit; only scenic parks/landmarks/museums/galleries/theaters or truly special interactive places may be farther; never 昙华林/博物馆/东湖/万林/ordinary bookstore; no breakfast/noodle/hotpot/bbq/restaurant-only; intro<=10 Chinese chars.
+        display_name=clean UI name. amap_search_keyword=core name+area for AMap. meal=nearby food/drink<=2.5km. play=nearby hidden-gem non-food leisure; prefer DIY/pottery/tufting/baking/retro arcade/lifestyle/vintage/record/toy/craft/small gallery before parks/riverside/scenic walks unless outdoor is clearly the best fit; only scenic parks/landmarks/museums/galleries/theaters or truly special interactive places may be farther; never ${WuhanKnowledgeConfig.aiAvoidDefaultSignals.joinToString("/")}/ordinary bookstore; no breakfast/noodle/hotpot/bbq/restaurant-only; intro<=10 Chinese chars.
 """.trimIndent()
     }
 
@@ -1154,7 +1154,7 @@ $categoryHint
         return name
             .lowercase(Locale.ROOT)
             .replace(Regex("[\\s\\p{Punct}（）()【】\\[\\]「」『』《》“”‘’、，。！？；：·•-]+"), "")
-            .replace("武汉", "")
+            .replace(WuhanKnowledgeConfig.CITY, "")
             .trim()
     }
 

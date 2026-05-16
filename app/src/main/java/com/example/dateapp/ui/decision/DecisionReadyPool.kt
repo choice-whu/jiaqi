@@ -2,6 +2,7 @@ package com.example.dateapp.ui.decision
 
 import android.os.SystemClock
 import android.util.Log
+import com.example.dateapp.data.WuhanKnowledgeConfig
 import com.example.dateapp.data.decision.DecisionNameMatcher
 import java.util.Locale
 
@@ -214,24 +215,7 @@ class DecisionReadyPool(
             "批发部"
         )
 
-        private val tripWorthyPlayKeywords = listOf(
-            "黄鹤楼",
-            "晴川阁",
-            "古德寺",
-            "江滩",
-            "东湖",
-            "植物园",
-            "美术馆",
-            "博物馆",
-            "艺术馆",
-            "剧场",
-            "livehouse",
-            "展览",
-            "看展",
-            "江汉路",
-            "武汉天地",
-            "光谷"
-        )
+        private val tripWorthyPlayKeywords = WuhanKnowledgeConfig.tripWorthySignals
 
         private val afternoonFunctionalMealKeywords = listOf(
             "小吃",
