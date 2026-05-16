@@ -792,6 +792,25 @@ class DecisionEngine(
                 return true
             }
 
+            val parkInfrastructure = listOf(
+                "休息亭",
+                "凉亭",
+                "纪念林",
+                "发展林",
+                "主题林",
+                "红枫林",
+                "海棠林",
+                "树林",
+                "公厕",
+                "厕所",
+                "洗手间",
+                "停车场",
+                "管理处"
+            ).any(normalizedName::contains)
+            if (parkInfrastructure) {
+                return true
+            }
+
             val lowDateAppealDestination = listOf(
                 "惨案",
                 "遗址",
@@ -804,7 +823,8 @@ class DecisionEngine(
                 "培训",
                 "辅导",
                 "留学",
-                "教学"
+                "教学",
+                "生育"
             ).any(normalizedName::contains)
             if (lowDateAppealDestination) {
                 return true

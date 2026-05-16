@@ -116,11 +116,6 @@ class DecisionViewModel(
     private var dislikedMealFeedbackCount = recommendationFeedbackStore.recentCategoryDislikeCount("meal")
     private var dislikedPlayFeedbackCount = recommendationFeedbackStore.recentCategoryDislikeCount("play")
 
-    private var autoTestJob: Job? = null
-    private var autoTestCycleCount = 0
-    private var autoTestSaveCount = 0
-    private var autoTestDislikeCount = 0
-
     init {
         viewModelScope.launch {
             repository.getAllUnvisitedWishItems().collect { wishItems ->
@@ -132,86 +127,6 @@ class DecisionViewModel(
         }
 
         prewarmEnvironmentSnapshot()
-    }
-
-    fun startAutoTest() {
-        if (autoTestJob?.isActive == true) return
-        Log.d(TAG, "decision source=AUTO_TEST_START")
-        autoTestJob = viewModelScope.launch {
-            // Wait for environment to be ready
-            delay(3_000L)
-            while (coroutineContext.isActive) {
-                // Wait if a prefetch is in progress
-                if (prefetchJob?.isActive == true) {
-                    delay(1_000L)
-                    continue
-                }
-                if (_uiState.value.isAiSearching) {
-                    delay(500L)
-                    continue
-                }
-
-                autoTestCycleCount++
-                val currentMode = _uiState.value.decisionMode
-                val shouldSwitchToMeal = autoTestCycleCount % 5 == 0
-                val targetCategory = if (shouldSwitchToMeal && currentMode == DecisionMode.PLAY) {
-                    setDecisionMode(DecisionMode.MEAL)
-                    delay(800L)
-                    "meal"
-                } else if (autoTestCycleCount % 5 == 1 && currentMode == DecisionMode.MEAL) {
-                    setDecisionMode(DecisionMode.PLAY)
-                    delay(800L)
-                    "play"
-                } else {
-                    currentMode.category
-                }
-
-                Log.d(TAG, "decision source=AUTO_TEST_CYCLE cycle=$autoTestCycleCount category=$targetCategory saves=$autoTestSaveCount dislikes=$autoTestDislikeCount")
-
-                requestAiDecision(targetCategory)
-
-                // Wait for decision to complete
-                var waitMs = 0L
-                while (_uiState.value.isAiSearching && waitMs < 30_000L) {
-                    delay(300L)
-                    waitMs += 300L
-                }
-
-                // Log the result
-                val card = _uiState.value.selectedCard
-                if (card != null) {
-                    Log.d(
-                        TAG,
-                        "decision source=AUTO_TEST_RESULT cycle=$autoTestCycleCount title=${card.title} category=${card.category} tag=${card.tag} source=${card.source} location=${card.locationLabel} distance=${card.distanceDescription} supporting=${card.supportingText.take(120)}"
-                    )
-
-                    // Auto-feedback: occasionally save or dislike to build profile
-                    when {
-                        // Every 8th card: save (positive feedback)
-                        autoTestCycleCount % 8 == 0 -> {
-                            saveDecisionCardToWishPool(card)
-                            autoTestSaveCount++
-                            Log.d(TAG, "decision source=AUTO_TEST_FEEDBACK action=SAVE cycle=$autoTestCycleCount")
-                        }
-                        // Every 12th card: not interested (negative feedback)
-                        autoTestCycleCount % 12 == 0 -> {
-                            markDecisionNotInterested(card)
-                            autoTestDislikeCount++
-                            Log.d(TAG, "decision source=AUTO_TEST_FEEDBACK action=DISLIKE cycle=$autoTestCycleCount")
-                        }
-                    }
-                }
-
-                // Wait before next cycle (longer to avoid prefetch conflicts)
-                delay(8_000L + (autoTestCycleCount % 5) * 1_000L)
-            }
-        }
-    }
-
-    fun stopAutoTest() {
-        autoTestJob?.cancel()
-        autoTestJob = null
-        Log.d(TAG, "decision source=AUTO_TEST_STOP cycles=$autoTestCycleCount saves=$autoTestSaveCount dislikes=$autoTestDislikeCount")
     }
 
     fun drawAnotherWish() {

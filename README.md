@@ -199,24 +199,23 @@ Warm Minimalism：
 - 构建：`assembleDebug`，Kotlin 编译通过，无 lint 错误
 - 安装：`adb install -r app-debug.apk` 成功
 - 启动：成功，无 `FATAL EXCEPTION`
-- 推荐链路：AMap-First 全链路打通，6 轮连续推荐全部命中真实 POI
+- 推荐链路：AMap-First 全链路打通，连续推荐全部命中真实 POI
 - 环境链路：高德定位与天气接口返回有效上下文
 - AI 链路：`deepseek-v4-flash` 在精选和润色环节稳定工作
+- 低质量过滤：已过滤休息亭/凉亭/纪念林/公厕/停车场等非约会场所
 
 示例推荐结果：
 
 | 主题 | 推荐 | 距离 |
 |---|---|---|
+| 脱口秀/小剧场 | 果然戏剧小剧场(汉街万达店) | 2.2km |
 | 街机电玩城 | 汉街次元疯爆电玩社 | 1.4km |
 | 江边散步 | 水果湖码头 | 1.0km |
 | 唱片店 | 小宋唱片(汉街总店) | 1.8km |
-| 猫咖 | Tom&Jojo宠物咖啡店 | 1.5km |
-| 异国料理 | 印度餐厅ROYALINDIA | 987m |
+| 异国料理 | 印度玛咖(银泰创意城店) | 137m |
 | 日料 | 九久煮艺(湖大店) | 654m |
 
 ## 后续方向
 
-- `DecisionViewModel`（1261 行）可继续拆分卡片组装、名称追踪、兜底处理到独立类。
-- 为 `DecisionCandidateScorer`、`AiJsonSanitizer`、`WuhanKnowledgeConfig` 补充单元测试。
-- 增加画像解释页，让用户看到"佳期为什么这样推荐"。
 - 整理包名和签名配置为正式发布形态。
+- 增加画像解释页，让用户看到"佳期为什么这样推荐"。
