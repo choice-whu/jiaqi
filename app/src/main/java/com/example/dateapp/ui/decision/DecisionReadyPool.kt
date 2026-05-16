@@ -22,6 +22,7 @@ class DecisionReadyPool(
     fun consume(
         targetCategory: String,
         currentTitle: String?,
+        recentNames: List<String>,
         dislikedNames: List<String>,
         activeEnvironmentKey: String,
         currentHour: Int
@@ -40,6 +41,7 @@ class DecisionReadyPool(
             val card = cachedCard.card
             card.category == targetCategory &&
                 !isSimilarPlaceName(card.title, currentTitle.orEmpty()) &&
+                recentNames.none { recentName -> isSimilarPlaceName(card.title, recentName) } &&
                 dislikedNames.none { dislikedName -> isSimilarPlaceName(card.title, dislikedName) }
         }
         if (index < 0) {

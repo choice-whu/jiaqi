@@ -575,6 +575,7 @@ class DecisionViewModel(
         val card = readyPool.consume(
             targetCategory = targetCategory,
             currentTitle = _uiState.value.selectedCard?.title,
+            recentNames = nameTracker.getRecentNames(),
             dislikedNames = nameTracker.getDislikedNames(),
             activeEnvironmentKey = environmentCache.activeEnvironmentKey(),
             currentHour = currentHour()
